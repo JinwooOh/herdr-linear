@@ -1,0 +1,13 @@
+# Copy to ~/.config/herdr-linear/config.toml (or to the plugin's config dir when
+# run as a Herdr plugin: `herdr plugin config-dir herdr-linear`).
+#
+# Each Account is one Linear login. Give it a key_env (name of an environment
+# variable) or a key_file (path to a file holding the key). Keys never go in this file.
+
+[[accounts]]
+name = "work"
+key_env = "LINEAR_API_KEY_WORK"
+
+[[accounts]]
+name = "personal"
+key_file = "~/.config/herdr-linear/personal.key"

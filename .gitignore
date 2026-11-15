@@ -1,0 +1,11 @@
+/target
+
+# Local planning notes; not part of the distributed plugin
+/.scratch/
+
+# Local credentials and configuration
+.env
+.env.*
+*.key
+api_key
+/config.toml

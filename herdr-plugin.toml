@@ -1,0 +1,21 @@
+id = "herdr-linear"
+name = "herdr-linear"
+version = "0.1.0"
+description = "Linear issues and PR review in a Herdr pane."
+min_herdr_version = "0.7.5"
+platforms = ["macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[panes]]
+id = "issues"
+title = "Linear"
+placement = "split"
+command = ["./target/release/herdr-linear"]
+
+[[actions]]
+id = "open-issues"
+title = "Open Linear issues"
+description = "Open the Linear issues pane in a split beside the current work."
+command = ["bash", "scripts/open.sh"]
