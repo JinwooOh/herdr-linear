@@ -242,9 +242,9 @@ Confirm the managed checkout's build completes, then invoke **Open Linear issues
 UI launcher and verify both configured Accounts load. Repeat the interactive checks above.
 If installation fails, restore local development with `herdr plugin link /path/to/herdr-linear`.
 Fresh uninstall/install, the managed-checkout build, CLI action launch, and both Account loads
-have been verified on macOS / Herdr 0.9.5. The actual Herdr UI-launcher invocation remains a
-manual check; a CLI invocation is not a substitute for that UI check. Older Herdr releases,
-Linux, and Windows are not validated.
+have been verified on macOS / Herdr 0.9.5. The maintainer also confirmed that invoking the action
+through Herdr's UI keybinding opens and focuses the Linear pane. No action `contexts` field was
+needed on that version. Older Herdr releases, Linux, and Windows are not validated.
 
 Read-only GitHub integration test (optional; requires `gh` authentication):
 
