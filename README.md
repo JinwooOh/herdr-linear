@@ -50,8 +50,9 @@ Prerequisites: macOS, Herdr, the Rust toolchain above, authenticated `gh`, and o
 per Account. Herdr builds this plugin from source; it does not install Rust or `gh` for you.
 Ensure `cargo` is on the `PATH` inherited by Herdr (restart Herdr after installing Rust if needed).
 
-**Release preparation:** the repository is currently private. The command below is the intended
-public install path after publication; it has not yet passed the fresh-install smoke test.
+Install the public repository directly from GitHub. A fresh GitHub-managed install, its Cargo
+build, and the CLI launcher action have been verified on macOS with Herdr 0.9.5; both configured
+Accounts loaded.
 
 ```sh
 herdr plugin install JinwooOh/herdr-linear
@@ -196,8 +197,9 @@ cargo build --release
 herdr plugin link "$PWD"
 ```
 
-The repository currently requires GitHub access while private. The same plugin config directory is
-used for linked and GitHub-managed installs; keep key files outside the checkout.
+The same plugin config directory is used for linked and GitHub-managed installs; keep key files
+outside the checkout. To switch from an installed plugin to local development, first unregister
+that installation with `herdr plugin uninstall herdr-linear`, then link the checkout.
 
 ## Update and restart
 
@@ -208,6 +210,8 @@ herdr plugin update herdr-linear
 ```
 
 For a linked development checkout, pull the desired code and run `cargo build --release` instead.
+Rebuilding a separate development checkout does **not** update a GitHub-managed installation;
+use `herdr plugin update herdr-linear` after changes reach the installed GitHub ref.
 Close existing Linear panes with `q` and reopen them: updating/rebuilding does not restart them,
 and the launcher deliberately focuses an existing pane rather than replacing it.
 
@@ -222,7 +226,7 @@ and the launcher deliberately focuses an existing pane rather than replacing it.
 7. Invoke **Open Linear issues** from the Herdr UI launcher (or its configured keybinding).
    Repeat it and confirm it focuses the existing Linear pane instead of creating a duplicate.
 
-### Fresh GitHub-install smoke test (after publication)
+### Fresh GitHub-install smoke test
 
 This replaces your plugin registration. Keep a local-checkout path available for recovery, and
 confirm your config/key files are outside the plugin root. Uninstalling preserves config/state,
@@ -237,7 +241,10 @@ herdr plugin config-dir herdr-linear
 Confirm the managed checkout's build completes, then invoke **Open Linear issues** from Herdr's
 UI launcher and verify both configured Accounts load. Repeat the interactive checks above.
 If installation fails, restore local development with `herdr plugin link /path/to/herdr-linear`.
-These steps are a pending release gate, not a claim that a fresh install has already been verified.
+Fresh uninstall/install, the managed-checkout build, CLI action launch, and both Account loads
+have been verified on macOS / Herdr 0.9.5. The actual Herdr UI-launcher invocation remains a
+manual check; a CLI invocation is not a substitute for that UI check. Older Herdr releases,
+Linux, and Windows are not validated.
 
 Read-only GitHub integration test (optional; requires `gh` authentication):
 
