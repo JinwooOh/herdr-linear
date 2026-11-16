@@ -31,7 +31,8 @@ Changed files on the left and the selected file's diff on the right.
 - PR readiness (checks, review decision, conflicts) and optional, explicitly confirmed merging
 
 The app reads PRs and can merge them when enabled; it does not approve or comment on PRs.
-Merging is **off by default** and does not change the linked Linear issue's Issue state.
+Merging is **off by default**. The app does not write the linked Linear issue's Issue state
+when merging; independently configured Linear/GitHub automation may update it.
 
 Polling uses a complete membership snapshot to remove completed, unassigned, or deleted issues;
 `updatedAt` identifies unchanged issue objects. One Account failure doesn't disable the others,
@@ -141,7 +142,7 @@ Restart existing panes after rebuilding; they don't hot-reload the binary.
 | `s` | Pick a new issue state for its team |
 | `r` | Refresh this Account, or all Accounts in the All-accounts queue |
 | `q`, `Esc` | Quit (`Esc` first cancels a pending PR load) |
-| `Ctrl+C` | Quit from any view |
+| `Ctrl+C` | Quit from any view (waits while a submitted merge is being verified) |
 
 PR and state pickers: `j/k` or arrows to select, `Enter` to open/apply, `Esc` or `q` to cancel.
 States are listed in workflow order (backlog → started → done → canceled), with the current state
@@ -186,6 +187,9 @@ With merging enabled, press `m` in the PR view. Use `j/k` or arrows to choose an
 then `Enter` to inspect the confirmation's repository, PR number, title, and method. Only lowercase
 `y` submits; any other key returns to the method picker. From the picker, `Esc`, `q`, or Backspace
 cancels without changing the diff. Once submitted, a merge cannot be canceled by navigating away.
+You can still read files and return to the issue list, but quitting from the issue list or with
+`Ctrl+C` waits until the submitted write and its immediate outcome check finish. This keeps the
+worker's deadline and result verification supervised; the pane remains responsive.
 
 The app blocks drafts, closed/already-merged PRs, known conflicts, and unavailable/refreshing PR
 status. Checks and review decisions are advisory: GitHub enforces required reviews, checks,
@@ -203,7 +207,8 @@ may instead queue the PR. **Merge outcome unknown** or **Merge not confirmed** m
 to refresh status and **do not resubmit**, even after a timeout or connection error. The app never
 automatically retries a merge and keeps unresolved/queued PRs blocked from resubmission for the
 current app session, including after reopening the PR. Do not restart merely to bypass that guard;
-check the actual GitHub state first. Merging does not approve, comment, or change the Linear Issue state.
+check the actual GitHub state first. Merging does not approve or comment. The merge flow never
+submits a Linear Issue-state mutation; any configured GitHub/Linear state automation is separate.
 
 ## Open the pane
 
@@ -276,7 +281,8 @@ and the launcher deliberately focuses an existing pane rather than replacing it.
    Open that PR, inspect readiness (`r`) and the diff, press `m`, and verify only repository-allowed
    methods appear. Cancel once; then choose a method, press `Enter`, verify the confirmation identity,
    and press `y` to merge. Confirm **Merged · merging disabled** and independently verify the PR is
-   merged in GitHub, its branch remains, and the Linear Issue state is unchanged. If the outcome is
+   merged in GitHub and its branch remains. The app must not submit a Linear Issue-state mutation;
+   account for any separately configured GitHub/Linear state automation. If the outcome is
    unknown/not confirmed (including queued), refresh and inspect GitHub; do not submit again.
    Restore `enable_merge = false` and restart afterward. This is a manual write test, not an automated
    test or a claim that live merging has been validated.
