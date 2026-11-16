@@ -29,8 +29,121 @@ pub struct FileDiff {
     pub full: Option<Result<FullFile, String>>,
 }
 
+/// Identity of the immutable diff being read, not the latest PR head.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrSnapshot {
+    pub original_url: String,
+    pub url: String,
+    pub repository: String,
+    pub number: u64,
+    pub title: String,
+    pub head_sha: String,
+    pub base_sha: String,
+}
+
+pub struct LoadedReview {
+    pub snapshot: PrSnapshot,
+    pub files: Vec<FileDiff>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Readiness {
+    pub head_ref_oid: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub mergeable: String,
+    pub review_decision: Option<String>,
+    status_check_rollup: Option<Vec<Check>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Check {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    state: String,
+}
+
+impl Readiness {
+    pub fn checks(&self) -> &'static str {
+        let Some(checks) = self.status_check_rollup.as_ref().filter(|c| !c.is_empty()) else {
+            return "none";
+        };
+        let mut pending = false;
+        let mut unknown = false;
+        for check in checks {
+            let outcome = if !check.state.is_empty() {
+                check.state.as_str()
+            } else if check.status == "COMPLETED" {
+                check.conclusion.as_deref().unwrap_or("")
+            } else {
+                check.status.as_str()
+            };
+            match outcome {
+                "FAILURE" | "ERROR" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED"
+                | "STARTUP_FAILURE" | "STALE" => return "failed",
+                "SUCCESS" | "NEUTRAL" | "SKIPPED" => {}
+                "PENDING" | "QUEUED" | "IN_PROGRESS" | "WAITING" | "REQUESTED" => pending = true,
+                _ => unknown = true,
+            }
+        }
+        if unknown {
+            "unknown"
+        } else if pending {
+            "pending"
+        } else {
+            "passed"
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        let state = match self.state.as_str() {
+            "MERGED" => "merged",
+            "CLOSED" => "closed",
+            "OPEN" if self.is_draft => "draft",
+            "OPEN" => "open",
+            _ => "unknown",
+        };
+        let mergeable = match self.mergeable.as_str() {
+            "CONFLICTING" => "conflicting",
+            "MERGEABLE" => "no conflicts",
+            _ => "conflicts unknown",
+        };
+        let decision = match self.review_decision.as_deref() {
+            Some("APPROVED") => "approved",
+            Some("CHANGES_REQUESTED") => "changes requested",
+            Some("REVIEW_REQUIRED") => "required",
+            None | Some("") => "none",
+            _ => "unknown",
+        };
+        format!(
+            "{state} · {mergeable} · checks {} · review {decision}",
+            self.checks()
+        )
+    }
+}
+
+pub fn load_readiness(pr_url: &str) -> Result<Readiness> {
+    let args = pr_args(
+        pr_url,
+        "view",
+        &[
+            "--json",
+            "headRefOid,state,isDraft,mergeable,reviewDecision,statusCheckRollup",
+        ],
+    )?;
+    serde_json::from_slice(&gh(&args)?).context("could not read PR status")
+}
+
 pub struct Review {
     pub title: String,
+    pub snapshot: Option<Box<PrSnapshot>>,
+    pub readiness: Option<Result<Readiness, String>>,
+    pub readiness_loading: bool,
+    pub readiness_started: Option<std::time::Instant>,
     pub files: Vec<FileDiff>,
     pub list: ListState,
     pub scroll: u16,
@@ -48,6 +161,10 @@ impl Review {
         }
         Self {
             title,
+            snapshot: None,
+            readiness: None,
+            readiness_loading: false,
+            readiness_started: None,
             files,
             list,
             scroll: 0,
@@ -56,6 +173,32 @@ impl Review {
             pending_file: None,
             file_started: std::time::Instant::now(),
         }
+    }
+
+    pub fn from_loaded(title: String, loaded: LoadedReview) -> Self {
+        let mut review = Self::new(title, loaded.files);
+        review.snapshot = Some(Box::new(loaded.snapshot));
+        review
+    }
+
+    pub fn readiness_line(&self) -> String {
+        let Some(snapshot) = &self.snapshot else {
+            return "PR status unavailable (no snapshot)".into();
+        };
+        let head: String = snapshot.head_sha.chars().take(12).collect();
+        let status = match &self.readiness {
+            Some(Ok(status)) => status.summary(),
+            Some(Err(error)) => format!("status failed: {}", error.lines().next().unwrap_or(error)),
+            None => "loading status…".into(),
+        };
+        crate::display::safe(&format!(
+            "head {head} · {status}{}",
+            if self.readiness_loading && self.readiness.is_some() {
+                " · refreshing…"
+            } else {
+                ""
+            }
+        ))
     }
 
     pub fn current(&self) -> Option<&FileDiff> {
@@ -206,6 +349,7 @@ fn first_line(stderr: &[u8]) -> String {
 #[serde(rename_all = "camelCase")]
 struct Metadata {
     url: String,
+    title: String,
     head_ref_oid: String,
     base_ref_oid: String,
     head_repository: Option<HeadRepository>,
@@ -216,11 +360,11 @@ struct HeadRepository {
     name_with_owner: String,
 }
 
-pub fn load(pr_url: &str) -> Result<Vec<FileDiff>> {
+pub fn load(pr_url: &str) -> Result<LoadedReview> {
     let metadata_args = pr_args(
         pr_url,
         "view",
-        &["--json", "url,headRefOid,baseRefOid,headRepository"],
+        &["--json", "url,title,headRefOid,baseRefOid,headRepository"],
     )?;
     let metadata: Metadata = serde_json::from_slice(&gh(&metadata_args)?)?;
     let repository = repository(&metadata.url)?;
@@ -233,7 +377,24 @@ pub fn load(pr_url: &str) -> Result<Vec<FileDiff>> {
     }
     let mut files = parse(&String::from_utf8_lossy(&diff));
     attach_sources(&mut files, &metadata, &repository);
-    Ok(files)
+    let number = metadata
+        .url
+        .rsplit('/')
+        .next()
+        .context("missing PR number")?
+        .parse()?;
+    Ok(LoadedReview {
+        snapshot: PrSnapshot {
+            original_url: pr_url.to_string(),
+            url: metadata.url,
+            repository,
+            number,
+            title: metadata.title,
+            head_sha: metadata.head_ref_oid,
+            base_sha: metadata.base_ref_oid,
+        },
+        files,
+    })
 }
 
 fn attach_sources(files: &mut [FileDiff], metadata: &Metadata, repository: &str) {
@@ -499,8 +660,9 @@ mod tests {
     #[ignore = "requires gh auth and HERDR_LINEAR_TEST_PR"]
     fn github_live_full_file_snapshot() {
         let url = std::env::var("HERDR_LINEAR_TEST_PR").expect("set a test PR URL");
-        let files = load(&url).unwrap();
-        let source = files
+        let loaded = load(&url).unwrap();
+        let source = loaded
+            .files
             .iter()
             .find(|f| f.path.ends_with(".rs"))
             .unwrap()
@@ -516,6 +678,7 @@ mod tests {
         let mut files=parse("diff --git a/old.rs b/old.rs\n--- a/old.rs\n+++ /dev/null\n-old\ndiff --git a/name.rs b/new.rs\n--- a/name.rs\n+++ b/new.rs\n+new\n");
         let metadata = Metadata {
             url: "https://github.com/o/r/pull/1".into(),
+            title: "Test PR".into(),
             head_ref_oid: "head".into(),
             base_ref_oid: "base".into(),
             head_repository: Some(HeadRepository {
@@ -561,6 +724,7 @@ mod tests {
         let mut files = parse(diff);
         let metadata = Metadata {
             url: "https://github.com/o/r/pull/1".into(),
+            title: "Test PR".into(),
             head_ref_oid: "head".into(),
             base_ref_oid: "base".into(),
             head_repository: None,

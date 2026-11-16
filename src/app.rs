@@ -152,7 +152,12 @@ mod workflow_tests;
 struct PendingReview {
     title: String,
     started: Instant,
-    result: Job<Vec<review::FileDiff>>,
+    result: Job<review::LoadedReview>,
+}
+
+struct PendingReadiness {
+    generation: u64,
+    result: Job<review::Readiness>,
 }
 
 struct PendingMutation {
@@ -172,6 +177,9 @@ pub struct App {
     pub queue_list: ListState,
     quit: bool,
     pending_review: Option<PendingReview>,
+    // Retained even after leaving the PR view: at most one status worker can run.
+    pending_readiness: Option<PendingReadiness>,
+    review_generation: u64,
     pending_mutation: Option<PendingMutation>,
 }
 
@@ -186,6 +194,8 @@ impl App {
             queue_list: ListState::default(),
             quit: false,
             pending_review: None,
+            pending_readiness: None,
+            review_generation: 0,
             pending_mutation: None,
         }
     }
@@ -269,6 +279,7 @@ impl App {
         self.poll_mutation();
         self.rebuild_queue(selected);
         self.poll_review();
+        self.poll_readiness();
         if let View::Review(review) = &mut self.view {
             review.poll_file();
         }
@@ -351,6 +362,7 @@ impl App {
                 KeyCode::Char('h') | KeyCode::Left => review.scroll_horizontal(-8),
                 KeyCode::Char('l') | KeyCode::Right => review.scroll_horizontal(8),
                 KeyCode::Char('f') => review.toggle_full_file(),
+                KeyCode::Char('r') if !review.readiness_loading => review.readiness_started = None,
                 _ => {}
             }
             return;
@@ -493,7 +505,7 @@ impl App {
     fn start_review(
         &mut self,
         title: String,
-        load: impl FnOnce() -> Result<Vec<review::FileDiff>, String> + Send + 'static,
+        load: impl FnOnce() -> Result<review::LoadedReview, String> + Send + 'static,
     ) {
         match Job::spawn(move || load().map_err(anyhow::Error::msg)) {
             Ok(result) => {
@@ -528,11 +540,75 @@ impl App {
         };
         let pending = self.pending_review.take().expect("pending review exists");
         match result {
-            Ok(files) => {
+            Ok(loaded) => {
                 self.status = None;
-                self.view = View::Review(Review::new(pending.title, files));
+                self.review_generation += 1;
+                self.view = View::Review(Review::from_loaded(pending.title, loaded));
             }
             Err(error) => self.status = Some(error),
+        }
+    }
+
+    fn poll_readiness(&mut self) {
+        self.poll_readiness_with(|url| Job::spawn(move || review::load_readiness(&url)));
+    }
+
+    fn poll_readiness_with(
+        &mut self,
+        spawn: impl FnOnce(String) -> Result<Job<review::Readiness>, String>,
+    ) {
+        if let Some(result) = self
+            .pending_readiness
+            .as_ref()
+            .and_then(|p| p.result.poll())
+        {
+            let pending = self
+                .pending_readiness
+                .take()
+                .expect("pending status exists");
+            if let View::Review(review) = &mut self.view {
+                if pending.generation == self.review_generation {
+                    review.readiness_loading = false;
+                    review.readiness = Some(result.and_then(|status| {
+                        if review
+                            .snapshot
+                            .as_ref()
+                            .is_some_and(|s| s.head_sha == status.head_ref_oid)
+                        {
+                            Ok(status)
+                        } else {
+                            Err("PR head changed; reopen PR to reload diff".into())
+                        }
+                    }));
+                }
+            }
+        }
+        if self.pending_readiness.is_some() {
+            return;
+        }
+        let View::Review(review) = &mut self.view else {
+            return;
+        };
+        let Some(snapshot) = &review.snapshot else {
+            return;
+        };
+        if review
+            .readiness_started
+            .is_some_and(|started| started.elapsed() < REFRESH_INTERVAL)
+        {
+            return;
+        }
+        review.readiness_started = Some(Instant::now());
+        let url = snapshot.original_url.clone();
+        match spawn(url) {
+            Ok(result) => {
+                review.readiness_loading = true;
+                self.pending_readiness = Some(PendingReadiness {
+                    generation: self.review_generation,
+                    result,
+                });
+            }
+            Err(error) => review.readiness = Some(Err(error)),
         }
     }
 

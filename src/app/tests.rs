@@ -14,7 +14,22 @@ fn app() -> App {
     ])
 }
 
-fn pending(app: &mut App) -> mpsc::Sender<Result<Vec<review::FileDiff>, String>> {
+pub(super) fn loaded(diff: &str) -> review::LoadedReview {
+    review::LoadedReview {
+        snapshot: review::PrSnapshot {
+            original_url: "https://github.com/o/r/pull/1".into(),
+            url: "https://github.com/o/r/pull/1".into(),
+            repository: "o/r".into(),
+            number: 1,
+            title: "Test PR".into(),
+            head_sha: "abcdef0123456789".into(),
+            base_sha: "base".into(),
+        },
+        files: review::parse(diff),
+    }
+}
+
+fn pending(app: &mut App) -> mpsc::Sender<Result<review::LoadedReview, String>> {
     let (sender, result) = Job::channel();
     app.pending_review = Some(PendingReview {
         title: "Test PR".into(),
@@ -29,7 +44,7 @@ fn completed_load_opens_review() {
     let mut app = app();
     let sender = pending(&mut app);
     sender
-        .send(Ok(review::parse("diff --git a/a.rs b/a.rs\n+new\n")))
+        .send(Ok(loaded("diff --git a/a.rs b/a.rs\n+new\n")))
         .unwrap();
     app.poll_review();
     let View::Review(review) = &app.view else {
@@ -71,7 +86,7 @@ fn escape_cancels_without_quitting_and_discards_late_result() {
     app.on_key(KeyCode::Esc);
     assert!(!app.quit);
     assert!(app.loading_review().is_none());
-    assert!(old.send(Ok(Vec::new())).is_err());
+    assert!(old.send(Ok(loaded(""))).is_err());
     app.poll_review();
     assert!(matches!(app.view, View::Issues));
 }
@@ -82,7 +97,7 @@ fn slow_loader_runs_off_the_ui_thread_and_repeated_enter_is_ignored() {
     let (release, wait) = mpsc::channel();
     app.start_review("Slow PR".into(), move || {
         wait.recv().unwrap();
-        Ok(Vec::new())
+        Ok(loaded(""))
     });
     app.poll_review();
     app.on_key(KeyCode::Enter);
@@ -188,7 +203,7 @@ fn cancelled_load_cannot_open_later_and_a_new_load_works() {
     app.on_key(KeyCode::Esc);
     app.on_key(KeyCode::Tab);
     assert_eq!(app.active, 1);
-    assert!(old.send(Ok(Vec::new())).is_err());
+    assert!(old.send(Ok(loaded(""))).is_err());
     let new = pending(&mut app);
     new.send(Err("new request failed".into())).unwrap();
     app.poll_review();

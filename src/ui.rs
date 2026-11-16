@@ -325,7 +325,10 @@ fn account_tabs(app: &App) -> Line<'static> {
         Style::new()
     };
     spans.push(Span::raw(" | "));
-    spans.push(Span::styled(format!("All-accounts queue ({}) ", app.queue.len()), style));
+    spans.push(Span::styled(
+        format!("All-accounts queue ({}) ", app.queue.len()),
+        style,
+    ));
     Line::from(spans)
 }
 
@@ -386,8 +389,18 @@ fn detail_lines(issue: &Issue) -> Vec<Line<'static>> {
 }
 
 fn draw_review(frame: &mut Frame, review: &mut Review, messages: &str) {
-    let [body, footer] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(4)]).areas(frame.area());
+    let [status, body, footer] = Layout::vertical([
+        Constraint::Length(if frame.area().width < 100 { 3 } else { 2 }),
+        Constraint::Min(0),
+        Constraint::Length(5),
+    ])
+    .areas(frame.area());
+    frame.render_widget(
+        Paragraph::new(review.readiness_line())
+            .wrap(Wrap { trim: false })
+            .style(Style::new().fg(Color::Cyan)),
+        status,
+    );
     let [left, right] = if body.width < 80 {
         Layout::vertical([Constraint::Length(5), Constraint::Min(0)]).areas(body)
     } else {
@@ -460,7 +473,7 @@ fn draw_review(frame: &mut Frame, review: &mut Review, messages: &str) {
         );
     }
     frame.render_widget(
-        Paragraph::new(format!("{messages}\nj/k file  d/u scroll  h/l horizontal\nf full/diff (toggle to retry)  esc/q back  Ctrl+C quit"))
+        Paragraph::new(format!("{messages}\nj/k file  d/u scroll  h/l horizontal\nf full/diff (toggle to retry)  r status\nesc/q back  Ctrl+C quit"))
             .style(Style::new().fg(Color::DarkGray)),
         footer,
     );

@@ -351,6 +351,8 @@ fn pr_view_footer_shows_status_and_bindings_at_sixty_columns() {
         .collect::<String>();
     assert!(screen.contains("PR changed while loading"));
     assert!(screen.contains("f full/diff"));
+    assert!(screen.contains("r status"));
+    assert!(screen.contains("esc/q back") && screen.contains("Ctrl+C quit"));
     app.view = View::Issues;
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let screen = terminal
@@ -423,6 +425,336 @@ fn ctrl_c_quits_from_any_view_but_plain_c_does_not() {
     assert!(!app.quit);
     app.on_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(app.quit);
+}
+
+fn open_loaded_pr(app: &mut App) {
+    let (sender, result) = Job::channel();
+    app.pending_review = Some(PendingReview {
+        title: "HL-1 Test PR".into(),
+        started: Instant::now(),
+        result,
+    });
+    sender
+        .send(Ok(super::tests::loaded(
+            "diff --git a/a.rs b/a.rs\n+new\ndiff --git a/b.rs b/b.rs\n+other\n",
+        )))
+        .unwrap();
+    app.poll_review();
+}
+
+fn status_job(app: &mut App) -> mpsc::Sender<Result<review::Readiness, String>> {
+    assert!(app.pending_readiness.is_none());
+    let (sender, result) = Job::channel();
+    app.pending_readiness = Some(PendingReadiness {
+        generation: app.review_generation,
+        result,
+    });
+    let View::Review(review) = &mut app.view else {
+        panic!("expected PR view")
+    };
+    review.readiness_started = Some(Instant::now());
+    review.readiness_loading = true;
+    sender
+}
+
+fn readiness(state: &str, draft: bool, mergeable: &str, decision: &str) -> review::Readiness {
+    serde_json::from_value(json!({
+        "headRefOid": "abcdef0123456789", "state": state, "isDraft": draft,
+        "mergeable": mergeable, "reviewDecision": decision,
+        "statusCheckRollup": [{"status":"COMPLETED", "conclusion":"SUCCESS"}]
+    }))
+    .unwrap()
+}
+
+#[test]
+fn readiness_scheduling_is_nonblocking_and_refreshes_without_overlapping_jobs() {
+    let mut app = app();
+    open_loaded_pr(&mut app);
+    let (release, blocked) = mpsc::channel();
+    app.poll_readiness_with(|url| {
+        assert_eq!(url, "https://github.com/o/r/pull/1");
+        Job::spawn(move || {
+            blocked.recv()?;
+            Ok(readiness("OPEN", false, "MERGEABLE", "APPROVED"))
+        })
+    });
+    app.on_key(KeyCode::Char('j'));
+    app.on_key(KeyCode::Char('r'));
+    assert!(render(&mut app).contains("+other"));
+    app.poll_readiness_with(|_| panic!("must not start a second worker"));
+    release.send(()).unwrap();
+    wait(&mut app, |app| app.pending_readiness.is_none());
+    let View::Review(review) = &app.view else {
+        panic!()
+    };
+    assert!(!review.readiness_loading);
+    assert!(review.readiness.as_ref().unwrap().is_ok());
+    app.poll_readiness_with(|_| panic!("status is still fresh"));
+
+    // An explicit r refresh and the periodic refresh use the same bounded path.
+    app.on_key(KeyCode::Char('r'));
+    let (sender, job) = Job::channel();
+    app.poll_readiness_with(|_| Ok(job));
+    assert!(render(&mut app).contains("refreshing…"));
+    sender.send(Err("refresh unavailable".into())).unwrap();
+    app.poll_background();
+    assert!(render(&mut app).contains("status failed: refresh unavailable"));
+    let View::Review(review) = &mut app.view else {
+        panic!()
+    };
+    review.readiness_started = Some(Instant::now() - REFRESH_INTERVAL);
+    let (sender, job) = Job::channel();
+    app.poll_readiness_with(|_| Ok(job));
+    sender
+        .send(Ok(readiness("CLOSED", false, "UNKNOWN", "")))
+        .unwrap();
+    app.poll_background();
+    assert!(render(&mut app).contains("closed ·"));
+}
+
+#[test]
+fn loaded_readiness_preserves_the_diff_snapshot_and_shows_pr_states() {
+    for (state, draft, mergeable, decision, expected) in [
+        (
+            "OPEN",
+            true,
+            "CONFLICTING",
+            "CHANGES_REQUESTED",
+            "draft · conflicting · checks passed · review changes requested",
+        ),
+        (
+            "MERGED",
+            false,
+            "UNKNOWN",
+            "APPROVED",
+            "merged · conflicts unknown · checks passed · review approved",
+        ),
+        (
+            "CLOSED",
+            false,
+            "MERGEABLE",
+            "",
+            "closed · no conflicts · checks passed · review none",
+        ),
+        (
+            "OPEN",
+            false,
+            "MERGEABLE",
+            "REVIEW_REQUIRED",
+            "open · no conflicts · checks passed · review required",
+        ),
+    ] {
+        let mut app = app();
+        open_loaded_pr(&mut app);
+        let sender = status_job(&mut app);
+        // A blocked status job neither masks the diff nor makes keys modal.
+        app.poll_background();
+        assert!(render(&mut app).contains("loading status"));
+        app.on_key(KeyCode::Char('j'));
+        let View::Review(review) = &app.view else {
+            panic!()
+        };
+        assert_eq!(review.current().unwrap().path, "b.rs");
+        sender
+            .send(Ok(readiness(state, draft, mergeable, decision)))
+            .unwrap();
+        app.poll_background();
+        let View::Review(review) = &app.view else {
+            panic!()
+        };
+        assert!(!review.readiness_loading);
+        assert!(
+            review.readiness_line().contains(expected),
+            "{}",
+            review.readiness_line()
+        );
+        let snapshot = review.snapshot.as_deref().unwrap();
+        assert_eq!(snapshot, &super::tests::loaded("").snapshot);
+        assert_eq!(snapshot.head_sha, "abcdef0123456789");
+        assert!(review.readiness_line().starts_with("head abcdef012345"));
+        assert_eq!(review.files.len(), 2);
+        assert!(render(&mut app).contains("+other"));
+    }
+}
+
+#[test]
+fn check_rollups_show_pending_failed_absent_and_unknown_without_guessing_success() {
+    for (checks, expected) in [
+        (
+            json!([{"status":"COMPLETED","conclusion":"SUCCESS"}, {"state":"PENDING"}]),
+            "pending",
+        ),
+        (
+            json!([{"state":"SUCCESS"}, {"status":"COMPLETED","conclusion":"FAILURE"}]),
+            "failed",
+        ),
+        (
+            json!([{"status":"COMPLETED","conclusion":"TIMED_OUT"}]),
+            "failed",
+        ),
+        (json!([{"status":"IN_PROGRESS"}]), "pending"),
+        (json!([{"state":"ERROR"}]), "failed"),
+        (
+            json!([{"status":"COMPLETED","conclusion":"NEUTRAL"}, {"status":"COMPLETED","conclusion":"SKIPPED"}]),
+            "passed",
+        ),
+        (json!([{"status":"COMPLETED","conclusion":null}]), "unknown"),
+        (json!([{"state":"NEW_STATE"}]), "unknown"),
+        (json!([]), "none"),
+        (json!(null), "none"),
+    ] {
+        let mut app = app();
+        open_loaded_pr(&mut app);
+        let sender = status_job(&mut app);
+        let status = serde_json::from_value(json!({
+            "headRefOid":"abcdef0123456789", "state":"OPEN", "isDraft":false,
+            "mergeable":"UNKNOWN", "reviewDecision":null, "statusCheckRollup":checks,
+        }))
+        .unwrap();
+        sender.send(Ok(status)).unwrap();
+        app.poll_background();
+        assert!(render(&mut app).contains(&format!("checks {expected}")));
+    }
+}
+
+#[test]
+fn readiness_failure_shows_only_first_line_and_diff_remains_usable() {
+    let mut app = app();
+    open_loaded_pr(&mut app);
+    let sender = status_job(&mut app);
+    sender
+        .send(Err(
+            "gh failed: unavailable\nprivate diagnostic detail".into()
+        ))
+        .unwrap();
+    app.poll_background();
+    let text = render(&mut app);
+    assert!(text.contains("status failed: gh failed: unavailable"));
+    assert!(!text.contains("private diagnostic detail"));
+    assert!(text.contains("+new"));
+    app.on_key(KeyCode::Char('j'));
+    app.on_key(KeyCode::Right);
+    let View::Review(review) = &app.view else {
+        panic!()
+    };
+    assert_eq!(review.current().unwrap().path, "b.rs");
+    assert!(review.horizontal > 0);
+    // r requests another asynchronous status load, not a diff reload or write.
+    app.on_key(KeyCode::Char('r'));
+    let View::Review(review) = &app.view else {
+        panic!()
+    };
+    assert!(review.readiness_started.is_none());
+    assert_eq!(review.files.len(), 2);
+    assert!(app.pending_mutation.is_none());
+}
+
+#[test]
+fn stale_readiness_is_discarded_even_when_reopening_the_same_head() {
+    let mut app = app();
+    open_loaded_pr(&mut app);
+    let old = status_job(&mut app);
+    let generation = app.review_generation;
+    app.on_key(KeyCode::Esc);
+    open_loaded_pr(&mut app);
+    assert_ne!(app.review_generation, generation);
+    // An old worker is retained until completion, bounding concurrency on reopen.
+    app.poll_background();
+    app.on_key(KeyCode::Char('r'));
+    app.poll_background();
+    assert_eq!(
+        app.pending_readiness.as_ref().unwrap().generation,
+        generation
+    );
+    let View::Review(review) = &mut app.view else {
+        panic!()
+    };
+    // Suppress automatic network work in this fake-only test.
+    review.readiness_started = Some(Instant::now());
+    old.send(Ok(readiness("CLOSED", false, "UNKNOWN", "")))
+        .unwrap();
+    app.poll_background();
+    let View::Review(review) = &app.view else {
+        panic!()
+    };
+    assert!(review.readiness.is_none());
+    assert!(!render(&mut app).contains("closed ·"));
+    let current = status_job(&mut app);
+    current
+        .send(Ok(readiness("OPEN", false, "MERGEABLE", "APPROVED")))
+        .unwrap();
+    app.poll_background();
+    assert!(render(&mut app).contains("review approved"));
+}
+
+#[test]
+fn changed_head_status_cannot_relabel_the_diff_snapshot() {
+    let mut app = app();
+    open_loaded_pr(&mut app);
+    let sender = status_job(&mut app);
+    let mut status = readiness("OPEN", false, "MERGEABLE", "APPROVED");
+    status.head_ref_oid = "newer-head".into();
+    sender.send(Ok(status)).unwrap();
+    app.poll_background();
+    let text = render(&mut app);
+    assert!(text.contains("head abcdef012345"));
+    assert!(text.contains("PR head changed; reopen PR to reload diff"));
+    assert!(!text.contains("review approved") && !text.contains("newer-head"));
+    assert!(text.contains("+new"));
+}
+
+#[test]
+fn readiness_results_after_leaving_the_pr_view_are_ignored() {
+    let mut app = app();
+    open_loaded_pr(&mut app);
+    let sender = status_job(&mut app);
+    app.on_key(KeyCode::Esc);
+    sender.send(Err("stale error".into())).unwrap();
+    app.poll_background();
+    assert!(matches!(app.view, View::Issues));
+    assert!(app.status.is_none() && app.pending_readiness.is_none());
+}
+
+#[test]
+fn readiness_and_all_pr_footer_keys_fit_at_sixty_columns() {
+    let mut app = app();
+    open_loaded_pr(&mut app);
+    let sender = status_job(&mut app);
+    sender
+        .send(Ok(readiness(
+            "OPEN",
+            true,
+            "CONFLICTING",
+            "CHANGES_REQUESTED",
+        )))
+        .unwrap();
+    app.poll_background();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 24)).unwrap();
+    terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>();
+    for label in [
+        "head abcdef012345",
+        "draft",
+        "conflicting",
+        "checks passed",
+        "changes requested",
+        "+new",
+        "j/k file",
+        "d/u scroll",
+        "h/l horizontal",
+        "f full/diff (toggle to retry)",
+        "r status",
+        "esc/q back",
+        "Ctrl+C quit",
+    ] {
+        assert!(text.contains(label), "missing {label}: {text}");
+    }
 }
 
 fn render(app: &mut App) -> String {
