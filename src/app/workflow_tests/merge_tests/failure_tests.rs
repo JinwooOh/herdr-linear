@@ -23,6 +23,52 @@ fn review(app: &App) -> &Review {
 }
 
 #[test]
+fn normal_quit_keys_keep_submitted_merges_and_verification_supervised() {
+    use ratatui::crossterm::event::{KeyEvent, KeyModifiers};
+    fn assert_cannot_quit(app: &mut App) {
+        app.view = View::Issues;
+        for code in [KeyCode::Char('q'), KeyCode::Esc] {
+            app.on_key(code);
+            assert!(!app.quit);
+            assert!(app
+                .status
+                .as_deref()
+                .unwrap()
+                .contains("wait for outcome verification"));
+        }
+        app.on_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(!app.quit);
+        assert!(app
+            .status
+            .as_deref()
+            .unwrap()
+            .contains("wait for outcome verification"));
+    }
+
+    let mut app = ready_app();
+    load_methods(&mut app, vec![MergeMethod::Squash]);
+    app.on_key(KeyCode::Enter);
+    app.on_key(KeyCode::Char('y'));
+    assert!(app.merge_request.is_some());
+    assert_cannot_quit(&mut app);
+    let (sender, job) = Job::channel();
+    app.poll_merge_with(|_| panic!("methods already loaded"), |_, _| Ok(job));
+    assert!(app.pending_merge.is_some());
+    assert_cannot_quit(&mut app);
+    sender.send(Ok(Submission::Accepted)).unwrap();
+    poll(&mut app);
+    assert!(app.pending_merge_check.is_some());
+    assert_cannot_quit(&mut app);
+    verify(
+        &mut app,
+        Ok(readiness("MERGED", false, "MERGEABLE", "APPROVED")),
+    );
+    assert!(app.pending_merge_check.is_none());
+    app.on_key(KeyCode::Char('q'));
+    assert!(app.quit);
+}
+
+#[test]
 fn head_mismatch_never_verifies_or_retries_a_write_or_replaces_the_diff() {
     let mut app = ready_app();
     let sender = submit(&mut app);

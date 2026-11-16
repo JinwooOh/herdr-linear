@@ -361,11 +361,23 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
-        // Raw mode delivers Ctrl+C as a key; quit from any view.
+        // Raw mode delivers Ctrl+C as a key. Keep supervising submitted writes.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.quit = true;
+            self.request_quit();
         } else {
             self.on_key(key.code);
+        }
+    }
+
+    fn request_quit(&mut self) {
+        if self.merge_request.is_some()
+            || self.pending_merge.is_some()
+            || self.pending_merge_check.is_some()
+        {
+            self.status =
+                Some("Merge submitted; wait for outcome verification before quitting.".into());
+        } else {
+            self.quit = true;
         }
     }
 
@@ -376,7 +388,7 @@ impl App {
         if self.pending_review.is_some() {
             match code {
                 KeyCode::Esc => self.cancel_review(),
-                KeyCode::Char('q') => self.quit = true,
+                KeyCode::Char('q') => self.request_quit(),
                 _ => {}
             }
             return;
@@ -409,7 +421,7 @@ impl App {
             return;
         }
         match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('q') | KeyCode::Esc => self.request_quit(),
             KeyCode::Char('j') | KeyCode::Down => self.list_mut().select_next(),
             KeyCode::Char('k') | KeyCode::Up => self.list_mut().select_previous(),
             KeyCode::Char('g') | KeyCode::Home => self.list_mut().select_first(),
