@@ -68,6 +68,20 @@ struct Check {
 }
 
 impl Readiness {
+    pub fn merge_unavailable(&self, snapshot: &PrSnapshot) -> Option<&'static str> {
+        if self.head_ref_oid != snapshot.head_sha {
+            return Some("PR changed, reload: reopen PR to reload diff.");
+        }
+        match self.state.as_str() {
+            "MERGED" => Some("PR is already merged."),
+            "CLOSED" => Some("PR is closed."),
+            "OPEN" if self.is_draft => Some("PR is a draft."),
+            "OPEN" if self.mergeable == "CONFLICTING" => Some("PR has conflicting changes."),
+            "OPEN" => None,
+            _ => Some("PR state is unknown; refresh PR status."),
+        }
+    }
+
     pub fn checks(&self) -> &'static str {
         let Some(checks) = self.status_check_rollup.as_ref().filter(|c| !c.is_empty()) else {
             return "none";
@@ -150,6 +164,7 @@ pub struct Review {
     pub title: String,
     pub merge_picker: Option<MergePicker>,
     pub merged: bool,
+    pub merge_unresolved: bool,
     pub merge_message: Option<String>,
     pub snapshot: Option<Box<PrSnapshot>>,
     pub readiness: Option<Result<Readiness, String>>,
@@ -174,6 +189,7 @@ impl Review {
             title,
             merge_picker: None,
             merged: false,
+            merge_unresolved: false,
             merge_message: None,
             snapshot: None,
             readiness: None,
@@ -196,18 +212,29 @@ impl Review {
     }
 
     pub fn can_merge(&self) -> bool {
-        !self.merged
-            && !self.readiness_loading
-            && self.snapshot.as_ref().is_some_and(|snapshot| {
-                self.readiness.as_ref().is_some_and(|result| {
-                    result.as_ref().is_ok_and(|status| {
-                        status.head_ref_oid == snapshot.head_sha
-                            && status.state == "OPEN"
-                            && !status.is_draft
-                            && status.mergeable != "CONFLICTING"
-                    })
-                })
-            })
+        self.merge_unavailable().is_none()
+    }
+
+    pub fn merge_unavailable(&self) -> Option<&'static str> {
+        if self.merged {
+            return Some("PR is already merged.");
+        }
+        if self.merge_unresolved {
+            return Some("Merge unresolved or queued; refresh PR status, do not resubmit.");
+        }
+        if self.readiness_loading {
+            return Some("PR status is refreshing.");
+        }
+        let Some(snapshot) = &self.snapshot else {
+            return Some("No PR snapshot; reopen the PR.");
+        };
+        match &self.readiness {
+            Some(Ok(status)) => status.merge_unavailable(snapshot),
+            Some(Err(error)) if error.contains("PR head changed") => {
+                Some("PR changed, reload: reopen PR to reload diff.")
+            }
+            _ => Some("PR status unavailable; refresh PR status or reopen the PR."),
+        }
     }
 
     pub fn readiness_line(&self) -> String {
@@ -224,16 +251,16 @@ impl Review {
             None => "loading status…".into(),
         };
         crate::display::safe(&format!(
-            "head {head} · {status}{}{}",
+            "{}head {head} · {status}{}",
+            self.merge_message
+                .as_ref()
+                .map(|message| format!("{message} · "))
+                .unwrap_or_default(),
             if self.readiness_loading && self.readiness.is_some() {
                 " · refreshing…"
             } else {
                 ""
-            },
-            self.merge_message
-                .as_ref()
-                .map(|message| format!(" · {message}"))
-                .unwrap_or_default()
+            }
         ))
     }
 

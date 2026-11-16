@@ -169,7 +169,13 @@ struct PendingMethods {
 
 struct PendingMerge {
     snapshot: PrSnapshot,
-    job: Job<()>,
+    job: Job<merge::Submission>,
+}
+
+struct PendingMergeCheck {
+    snapshot: PrSnapshot,
+    submission: merge::Submission,
+    job: Option<Job<review::Readiness>>,
 }
 
 struct PendingMutation {
@@ -197,6 +203,9 @@ pub struct App {
     pending_methods: Option<PendingMethods>,
     merge_request: Option<(PrSnapshot, MergeMethod)>,
     pending_merge: Option<PendingMerge>,
+    pending_merge_check: Option<PendingMergeCheck>,
+    // Acknowledged/uncertain writes must not be resubmitted, even after reopening.
+    merge_guards: std::collections::HashSet<String>,
 }
 
 impl App {
@@ -217,6 +226,8 @@ impl App {
             pending_methods: None,
             merge_request: None,
             pending_merge: None,
+            pending_merge_check: None,
+            merge_guards: std::collections::HashSet::new(),
         }
     }
 
@@ -300,6 +311,7 @@ impl App {
         self.rebuild_queue(selected);
         self.poll_review();
         self.poll_merge();
+        self.poll_merge_check_with(|url| Job::spawn(move || review::load_readiness(&url)));
         self.poll_readiness();
         if let View::Review(review) = &mut self.view {
             review.poll_file();
@@ -572,7 +584,17 @@ impl App {
             Ok(loaded) => {
                 self.status = None;
                 self.review_generation += 1;
-                self.view = View::Review(Review::from_loaded(pending.title, loaded));
+                let mut review = Review::from_loaded(pending.title, loaded);
+                review.merge_unresolved = review
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| self.merge_guards.contains(&snapshot.url));
+                if review.merge_unresolved {
+                    review.merge_message = Some(
+                        "Merge unresolved or queued; refresh PR status, do not resubmit.".into(),
+                    );
+                }
+                self.view = View::Review(review);
             }
             Err(error) => self.status = Some(error),
         }
@@ -599,6 +621,11 @@ impl App {
                 if pending.generation == self.review_generation {
                     review.readiness_loading = false;
                     review.readiness = Some(result.and_then(|status| {
+                        if review.merge_unresolved && status.state == "MERGED" {
+                            review.merged = true;
+                            review.merge_message = None;
+                            return Ok(status);
+                        }
                         if review
                             .snapshot
                             .as_ref()
@@ -622,7 +649,12 @@ impl App {
             return;
         };
         // Do not refresh underneath a merge confirmation or overwrite a known success.
-        if review.merged || review.merge_picker.is_some() || self.pending_merge.is_some() {
+        if review.merged
+            || review.merge_picker.is_some()
+            || self.pending_merge.is_some()
+            || self.pending_merge_check.is_some()
+            || self.merge_request.is_some()
+        {
             return;
         }
         if review
@@ -648,6 +680,7 @@ impl App {
     fn open_merge_picker(&mut self) {
         if !self.merge_options.enable_merge
             || self.pending_merge.is_some()
+            || self.pending_merge_check.is_some()
             || self.merge_request.is_some()
         {
             return;
@@ -655,8 +688,8 @@ impl App {
         let View::Review(review) = &mut self.view else {
             return;
         };
-        if !review.can_merge() {
-            self.status = Some("Merge unavailable: refresh PR status or reopen the PR.".into());
+        if let Some(reason) = review.merge_unavailable() {
+            self.status = Some(format!("Merge unavailable: {reason}"));
             return;
         }
         review.merge_picker = Some(MergePicker {
@@ -685,11 +718,14 @@ impl App {
                     .copied();
                 if self.merge_options.enable_merge
                     && self.pending_merge.is_none()
+                    && self.pending_merge_check.is_none()
                     && self.merge_request.is_none()
                     && review.can_merge()
                 {
                     if let (Some(snapshot), Some(method)) = (&review.snapshot, method) {
+                        self.merge_guards.insert(snapshot.url.clone());
                         self.merge_request = Some((snapshot.as_ref().clone(), method));
+                        review.merge_unresolved = true;
                         // Any pre-write status result is now stale, but retain its job
                         // until completion to keep worker concurrency bounded.
                         self.review_generation += 1;
@@ -732,27 +768,40 @@ impl App {
     fn poll_merge_with(
         &mut self,
         methods: impl FnOnce(PrSnapshot) -> Result<Job<Vec<MergeMethod>>, String>,
-        submit: impl FnOnce(PrSnapshot, MergeMethod) -> Result<Job<()>, String>,
+        submit: impl FnOnce(PrSnapshot, MergeMethod) -> Result<Job<merge::Submission>, String>,
     ) {
         if let Some(result) = self.pending_merge.as_ref().and_then(|p| p.job.poll()) {
             let pending = self.pending_merge.take().expect("pending merge exists");
-            if let View::Review(review) = &mut self.view {
-                if review.snapshot.as_deref() == Some(&pending.snapshot) {
-                    match result {
-                        Ok(()) => {
-                            review.merged = true;
-                            review.merge_message = None;
-                        }
-                        Err(_) => {
-                            review.merge_message = Some(
-                                "Merge outcome unknown; refresh status before retrying".into(),
-                            );
-                            // A failed/timeout write may have succeeded. Require a fresh status.
-                            review.readiness = None;
-                            review.readiness_started = None;
-                        }
-                    }
+            // Worker panic/disconnect and every unclassified error are uncertain,
+            // not just literal timeouts. Never retry a write automatically.
+            let submission = result.unwrap_or(merge::Submission::Unknown);
+            let message = match &submission {
+                merge::Submission::Changed => {
+                    "PR changed, reload: reopen PR to reload diff.".into()
                 }
+                merge::Submission::Refused(reason) => format!(
+                    "Merge refused: {}",
+                    crate::display::safe(
+                        reason.lines().next().unwrap_or("GitHub refused the merge")
+                    )
+                ),
+                merge::Submission::Accepted => "Merge request accepted; verifying PR state…".into(),
+                merge::Submission::Unknown => "Merge outcome unknown; re-fetching PR state…".into(),
+            };
+            let reconcile = matches!(
+                submission,
+                merge::Submission::Accepted | merge::Submission::Unknown
+            );
+            if !reconcile {
+                self.merge_guards.remove(&pending.snapshot.url);
+            }
+            self.merge_message_for(&pending.snapshot, message, reconcile);
+            if reconcile {
+                self.pending_merge_check = Some(PendingMergeCheck {
+                    snapshot: pending.snapshot,
+                    submission,
+                    job: None,
+                });
             }
         }
         if let Some(result) = self.pending_methods.as_ref().and_then(|p| p.job.poll()) {
@@ -795,12 +844,12 @@ impl App {
             match submit(snapshot.clone(), method) {
                 Ok(job) => self.pending_merge = Some(PendingMerge { snapshot, job }),
                 Err(_) => {
-                    if let View::Review(review) = &mut self.view {
-                        if review.snapshot.as_deref() == Some(&snapshot) {
-                            review.merge_message =
-                                Some("Could not start merge worker; no merge submitted.".into());
-                        }
-                    }
+                    self.merge_guards.remove(&snapshot.url);
+                    self.merge_message_for(
+                        &snapshot,
+                        "Could not start merge worker; no merge submitted.".into(),
+                        false,
+                    );
                 }
             }
         }
@@ -831,6 +880,124 @@ impl App {
                 picker.loading = false;
                 picker.error =
                     Some("Could not start repository methods worker; cancel and retry.".into());
+            }
+        }
+    }
+
+    /// Report the captured PR identity even if the user has left its PR view.
+    fn merge_message_for(&mut self, snapshot: &PrSnapshot, message: String, unresolved: bool) {
+        self.status = Some(format!(
+            "{} PR #{}: {message}",
+            snapshot.repository, snapshot.number
+        ));
+        if let View::Review(review) = &mut self.view {
+            if review
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.url == snapshot.url)
+            {
+                review.readiness = if message.starts_with("PR changed, reload") {
+                    Some(Err("PR head changed; reopen PR to reload diff".into()))
+                } else {
+                    None
+                };
+                review.merge_message = Some(message);
+                review.merge_unresolved = unresolved;
+                review.readiness_loading = false;
+                review.readiness_started = None;
+            }
+        }
+    }
+
+    /// Reconcile even after navigation. A gh acknowledgement may mean queued,
+    /// and a lost response may mean merged. Only a fresh MERGED state is proof.
+    fn poll_merge_check_with(
+        &mut self,
+        spawn: impl FnOnce(String) -> Result<Job<review::Readiness>, String>,
+    ) {
+        let Some(pending) = &self.pending_merge_check else {
+            return;
+        };
+        if let Some(job) = &pending.job {
+            if let Some(result) = job.poll() {
+                let pending = self.pending_merge_check.take().expect("merge check exists");
+                self.apply_merge_check(pending, result);
+            }
+            return;
+        }
+        // Retain any invalidated status worker until it finishes; at most one
+        // status subprocess runs at a time.
+        if self.pending_readiness.is_some() {
+            return;
+        }
+        let url = pending.snapshot.url.clone();
+        match spawn(url) {
+            Ok(job) => {
+                self.pending_merge_check
+                    .as_mut()
+                    .expect("merge check exists")
+                    .job = Some(job)
+            }
+            Err(error) => {
+                let pending = self.pending_merge_check.take().expect("merge check exists");
+                self.apply_merge_check(pending, Err(error));
+            }
+        }
+    }
+
+    fn apply_merge_check(
+        &mut self,
+        pending: PendingMergeCheck,
+        result: Result<review::Readiness, String>,
+    ) {
+        let merged = result.as_ref().is_ok_and(|status| status.state == "MERGED");
+        let message = if merged {
+            "Merged (verified)".into()
+        } else {
+            let prefix = if result.is_err() || pending.submission == merge::Submission::Unknown {
+                "Merge outcome unknown"
+            } else {
+                "Merge not confirmed"
+            };
+            let detail = match &result {
+                Ok(status) if status.head_ref_oid != pending.snapshot.head_sha => {
+                    "PR changed, reload"
+                }
+                Ok(status) if status.state == "OPEN" => "PR still open (possibly queued)",
+                Ok(status) if status.state == "CLOSED" => "PR is closed",
+                Ok(_) => "PR state is unknown",
+                Err(_) => "could not verify PR state",
+            };
+            format!("{prefix}; {detail}. r refresh; do not resubmit.")
+        };
+        self.merge_message_for(&pending.snapshot, message, true);
+        if let View::Review(review) = &mut self.view {
+            if review
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.url == pending.snapshot.url)
+            {
+                review.merged = merged;
+                review.readiness_started = Some(Instant::now());
+                review.readiness = Some(
+                    result
+                        .map_err(|_| "Could not verify PR state".into())
+                        .and_then(|status| {
+                            if merged
+                                || review
+                                    .snapshot
+                                    .as_ref()
+                                    .is_some_and(|s| s.head_sha == status.head_ref_oid)
+                            {
+                                Ok(status)
+                            } else {
+                                Err("PR head changed; reopen PR to reload diff".into())
+                            }
+                        }),
+                );
+                if merged {
+                    review.merge_message = None;
+                }
             }
         }
     }

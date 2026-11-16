@@ -1,4 +1,17 @@
 use super::*;
+use crate::merge::Submission;
+
+mod failure_tests;
+
+fn verify(app: &mut App, result: Result<review::Readiness, String>) {
+    let (sender, job) = Job::channel();
+    app.poll_merge_check_with(|url| {
+        assert_eq!(url, "https://github.com/o/r/pull/1");
+        Ok(job)
+    });
+    sender.send(result).unwrap();
+    app.poll_merge_check_with(|_| panic!("must retain existing check"));
+}
 
 fn ready_app() -> App {
     let mut app = app();
@@ -195,8 +208,10 @@ fn explicit_confirmation_queues_pinned_background_merge_and_success_stays_in_pr_
     app.on_key(KeyCode::Char('j'));
     let text = render(&mut app);
     assert!(text.contains("Merging…") && text.contains("+other"));
-    sender.send(Ok(())).unwrap();
-    app.poll_background();
+    sender.send(Ok(Submission::Accepted)).unwrap();
+    poll(&mut app);
+    assert!(!render(&mut app).contains("Merged · merging disabled"));
+    verify(&mut app, Ok(readiness("MERGED", false, "UNKNOWN", "")));
     assert!(matches!(app.view, View::Review(_)));
     assert!(render(&mut app).contains("Merged · merging disabled"));
     app.on_key(KeyCode::Char('m'));
@@ -292,8 +307,9 @@ fn merge_result_follows_confirmed_identity_not_current_pr() {
         }
         app.on_key(KeyCode::Char('m'));
         poll(&mut app); // Cannot submit a second merge while one is outstanding.
-        sender.send(Ok(())).unwrap();
+        sender.send(Ok(Submission::Accepted)).unwrap();
         poll(&mut app);
+        verify(&mut app, Ok(readiness("MERGED", false, "UNKNOWN", "")));
         let View::Review(review) = &app.view else {
             panic!()
         };
