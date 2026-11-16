@@ -4,6 +4,13 @@
 # Each Account is one Linear login. Give it a key_env (name of an environment
 # variable) or a key_file (path to a file holding the key). Keys never go in this file.
 
+# Global merge options must precede all [[accounts]] tables.
+# Merging is opt-in; leave disabled unless you intend to merge from the PR view.
+enable_merge = false
+# Preferred method: "merge", "squash", or "rebase". Only repository-allowed
+# methods are offered; prefer squash, then the first allowed method, as fallback.
+merge_method = "squash"
+
 [[accounts]]
 name = "work"
 key_env = "LINEAR_API_KEY_WORK"

@@ -28,6 +28,10 @@ Changed files on the left and the selected file's diff on the right.
 - Background PR diffs, file navigation, vertical and horizontal scrolling
 - Full-file view with syntax highlighting, fetched at the PR's pinned head commit
 - Team-specific Linear state picker and background state changes
+- PR readiness (checks, review decision, conflicts) and optional, explicitly confirmed merging
+
+The app reads PRs and can merge them when enabled; it does not approve or comment on PRs.
+Merging is **off by default** and does not change the linked Linear issue's Issue state.
 
 Polling uses a complete membership snapshot to remove completed, unassigned, or deleted issues;
 `updatedAt` identifies unchanged issue objects. One Account failure doesn't disable the others,
@@ -40,7 +44,8 @@ not potentially colliding issue identifiers.
 - Herdr: verified with 0.9.5; the manifest's `min_herdr_version = "0.7.5"` is the original
   build target, not a tested compatibility floor
 - Rust 1.100 or newer with Cargo on `PATH` (see `rust-version` in `Cargo.toml`)
-- [`gh`](https://cli.github.com) authenticated for the repositories you review (`gh auth status`)
+- [`gh`](https://cli.github.com) authenticated for the repositories you review (`gh auth status`),
+  with repository merge permission if you opt in to merging
 - One Linear personal API key per Account, with write access if you want to change issue states
 - A real terminal/Herdr pane for the interactive app (Pi's command runner has no TTY)
 
@@ -78,6 +83,10 @@ herdr plugin config-dir herdr-linear
 Each Account (one Linear login) can use `key_env` or `key_file`. For example:
 
 ```toml
+# Global options: place before any [[accounts]] table.
+enable_merge = false
+merge_method = "squash"
+
 [[accounts]]
 name = "work"
 key_file = "~/.config/herdr-linear/work.key"
@@ -95,6 +104,17 @@ chmod 600 ~/.config/herdr-linear/{work,personal}.key
 
 Never put credentials in `config.toml`. Without a config file, the app falls back to
 `LINEAR_API_KEY` (or the plugin config directory's `api_key` file).
+
+Merge options are global, not per Account, and belong **before** the first `[[accounts]]` table:
+
+| Option | Type / default | Meaning |
+| --- | --- | --- |
+| `enable_merge` | Boolean, `false` | Set to `true` to enable `m` in the PR view; restart the app after changing config |
+| `merge_method` | String, `"squash"` | Preferred method: `"merge"`, `"squash"`, or `"rebase"` only |
+
+Only methods allowed by the repository appear in the picker. If the preferred method is unavailable,
+`squash` is preselected when allowed, otherwise the first allowed method. A preference is not an
+automatic merge. Omitting these options (including the no-config fallback) keeps merging disabled.
 
 ## Build and run
 
@@ -140,6 +160,8 @@ refreshed to show the real state. Completed/canceled issues disappear from the o
 | `d` / `u`, PageDown/PageUp | Scroll vertically |
 | `h` / `l`, left/right | Scroll horizontally |
 | `f` | Toggle Full-file view and diff mode (toggling again retries a failed load) |
+| `r` | Refresh PR readiness without replacing the pinned diff |
+| `m` | Choose a merge method (only when `enable_merge = true`) |
 | `Esc`, `q`, Backspace | Return to issues |
 
 Content and highlighting for Full-file view load off the UI thread and are cached for the current PR view.
@@ -155,7 +177,33 @@ few seconds it adds a note that large PRs can take a while. The box is modal: `E
 discards the pending result, `q`/`Ctrl+C` quit, and other keys are ignored. Full-file loads and the
 state list use the same indicator.
 The underlying `gh` process finishes independently; cancellation does not kill it. Issue fetching,
-PR fetching, full-file loading, and state changes all happen outside the terminal event loop.
+PR fetching, full-file loading, readiness checks, merging, and state changes all happen outside
+the terminal event loop.
+
+### Optional merging
+
+With merging enabled, press `m` in the PR view. Use `j/k` or arrows to choose an allowed method,
+then `Enter` to inspect the confirmation's repository, PR number, title, and method. Only lowercase
+`y` submits; any other key returns to the method picker. From the picker, `Esc`, `q`, or Backspace
+cancels without changing the diff. Once submitted, a merge cannot be canceled by navigating away.
+
+The app blocks drafts, closed/already-merged PRs, known conflicts, and unavailable/refreshing PR
+status. Checks and review decisions are advisory: GitHub enforces required reviews, checks,
+permissions, and branch protections. The app never bypasses protections, requests auto-merge, or
+deletes the branch. Each `gh` call has a 30-second deadline.
+
+The merge targets the pinned head commit you read, not a newer push. **PR changed, reload** means
+leave and reopen the PR to load and review its new diff; `r` refreshes status only. Repository-method
+load failures say to cancel and retry; an empty method list cannot submit. **Merge refused** shows
+the first line of GitHub's refusal; resolve the cause and refresh status before considering a retry.
+
+A successful command alone is not proof of a merge: the app re-fetches PR state. Only a verified
+`MERGED` state displays **Merged · merging disabled**, retaining the PR view for reading. GitHub
+may instead queue the PR. **Merge outcome unknown** or **Merge not confirmed** means press `r`
+to refresh status and **do not resubmit**, even after a timeout or connection error. The app never
+automatically retries a merge and keeps unresolved/queued PRs blocked from resubmission for the
+current app session, including after reopening the PR. Do not restart merely to bypass that guard;
+check the actual GitHub state first. Merging does not approve, comment, or change the Linear Issue state.
 
 ## Open the pane
 
@@ -222,8 +270,18 @@ and the launcher deliberately focuses an existing pane rather than replacing it.
 3. Select an issue with multiple Linked PRs, press `Enter`, choose a Linked PR, and test cancellation/retry.
 4. In the PR view, test `f` for Full-file view, `h/l`, `d/u`, and changing files; return with `Esc`.
 5. On a disposable test issue, press `s`, cancel once, then select/apply a state. Verify in Linear.
-6. Test a missing/invalid key: the other Account must still work.
-7. Invoke **Open Linear issues** from the Herdr UI launcher (or its configured keybinding).
+6. With the default config, confirm `m` in the PR view does nothing. For an explicitly authorized
+   merge smoke test, use only a **disposable PR in a throwaway repository** you control, linked to a
+   disposable Linear issue. Set top-level `enable_merge = true` in your private test config and restart.
+   Open that PR, inspect readiness (`r`) and the diff, press `m`, and verify only repository-allowed
+   methods appear. Cancel once; then choose a method, press `Enter`, verify the confirmation identity,
+   and press `y` to merge. Confirm **Merged · merging disabled** and independently verify the PR is
+   merged in GitHub, its branch remains, and the Linear Issue state is unchanged. If the outcome is
+   unknown/not confirmed (including queued), refresh and inspect GitHub; do not submit again.
+   Restore `enable_merge = false` and restart afterward. This is a manual write test, not an automated
+   test or a claim that live merging has been validated.
+7. Test a missing/invalid key: the other Account must still work.
+8. Invoke **Open Linear issues** from the Herdr UI launcher (or its configured keybinding).
    Repeat it and confirm it focuses the existing Linear pane instead of creating a duplicate.
 
 ### Fresh GitHub-install smoke test

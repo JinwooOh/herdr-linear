@@ -45,6 +45,8 @@ cargo build --release     # the user runs target/release/herdr-linear directly
 
 ## Boundaries
 
+- GitHub integration reads PRs and can optionally merge them; merging must stay off by default.
+  The app does not approve or comment on PRs. Linear Issue-state writes are separately supported.
 - Do not commit, push, or publish without user authorization. The agreed task workflow is a
   feature branch, validation, and a PR linked to Linear; do not merge PRs without approval.
 - Do not link the plugin into Herdr or edit `~/.config/herdr/config.toml` unless asked.

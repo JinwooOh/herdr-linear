@@ -74,6 +74,47 @@ fn merge_is_off_by_default_and_only_available_in_pr_view() {
 }
 
 #[test]
+fn published_example_config_keeps_merge_disabled_at_the_app_workflow_seam() {
+    // Require explicit top-level, correctly typed defaults in the shipped example.
+    // Never resolve Account keys or start real jobs while testing documentation.
+    #[derive(serde::Deserialize)]
+    struct ExampleOptions {
+        enable_merge: bool,
+        merge_method: MergeMethod,
+    }
+    let options: ExampleOptions =
+        toml::from_str(include_str!("../../../config.example.toml")).unwrap();
+    assert!(!options.enable_merge);
+    assert_eq!(options.merge_method, MergeMethod::Squash);
+
+    let mut app = ready_app();
+    app.merge_options = MergeOptions {
+        enable_merge: options.enable_merge,
+        merge_method: options.merge_method,
+    };
+    app.on_key(KeyCode::Char('m'));
+    poll(&mut app); // Panics if the disabled key queues any network/write job.
+    let View::Review(review) = &app.view else {
+        panic!("expected PR view")
+    };
+    assert!(review.merge_picker.is_none());
+    assert!(app.merge_request.is_none() && app.pending_merge.is_none());
+    assert!(app.pending_mutation.is_none());
+
+    // Opt-in still requires confirmation; the documented default is a preference only.
+    app.merge_options.enable_merge = true;
+    load_methods(&mut app, vec![MergeMethod::Merge, MergeMethod::Squash]);
+    let p = picker(&app);
+    assert_eq!(p.options[p.list.selected().unwrap()], MergeMethod::Squash);
+    app.on_key(KeyCode::Enter);
+    app.on_key(KeyCode::Esc); // Confirmation -> picker, not a submission.
+    app.on_key(KeyCode::Esc); // Picker -> unchanged PR view.
+    poll(&mut app);
+    assert!(app.merge_request.is_none() && app.pending_merge.is_none());
+    assert!(app.pending_mutation.is_none());
+}
+
+#[test]
 fn picker_only_lists_allowed_methods_and_preselects_configured_or_fallback() {
     use MergeMethod::*;
     for (preferred, allowed, selected) in [

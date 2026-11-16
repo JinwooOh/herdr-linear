@@ -44,4 +44,4 @@ A mode of the PR view that shows one changed file in full, at the PR's head comm
 _Avoid_: Full view, file view
 
 **Review**:
-The human activity of reviewing a PR. The app supports reading only, not approving or commenting.
+The human activity of reviewing a PR. The app supports reading and, when enabled, merging PRs, but does not approve or comment. Merging is off by default.
