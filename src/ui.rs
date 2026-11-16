@@ -19,6 +19,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     match &mut app.view {
         View::Review(review) => {
             draw_review(frame, review, &messages);
+            draw_merge_picker(frame, review);
             return;
         }
         View::PrPicker(picker) => {
@@ -473,8 +474,87 @@ fn draw_review(frame: &mut Frame, review: &mut Review, messages: &str) {
         );
     }
     frame.render_widget(
-        Paragraph::new(format!("{messages}\nj/k file  d/u scroll  h/l horizontal\nf full/diff (toggle to retry)  r status\nesc/q back  Ctrl+C quit"))
+        Paragraph::new(format!("{messages}\nj/k file  d/u scroll  h/l horizontal\nf full/diff (toggle to retry)  r status  m merge\nesc/q back  Ctrl+C quit"))
             .style(Style::new().fg(Color::DarkGray)),
+        footer,
+    );
+}
+
+fn draw_merge_picker(frame: &mut Frame, review: &mut Review) {
+    let (Some(picker), Some(snapshot)) = (&mut review.merge_picker, &review.snapshot) else {
+        return;
+    };
+    let area = frame.area();
+    let width = area.width.min(72);
+    let height = area.height.min(16);
+    let popup = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, popup);
+    let block = Block::bordered().title(if picker.confirming {
+        " Confirm merge "
+    } else {
+        " Choose merge method "
+    });
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let [details, body, footer] = Layout::vertical([
+        Constraint::Length(4),
+        Constraint::Min(0),
+        Constraint::Length(2),
+    ])
+    .areas(inner);
+    frame.render_widget(
+        Paragraph::new(crate::display::safe(&format!(
+            "PR #{} · {}\n{}",
+            snapshot.number, snapshot.repository, snapshot.title
+        )))
+        .wrap(Wrap { trim: false }),
+        details,
+    );
+    if picker.confirming {
+        let method = picker.list.selected().and_then(|i| picker.options.get(i));
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Method: {}\nMerge the head commit you read?",
+                method.map_or("unavailable", |m| m.name())
+            ))
+            .wrap(Wrap { trim: false }),
+            body,
+        );
+    } else if picker.loading || picker.error.is_some() {
+        frame.render_widget(
+            Paragraph::new(
+                picker
+                    .error
+                    .as_deref()
+                    .unwrap_or("Loading allowed merge methods…"),
+            )
+            .wrap(Wrap { trim: false }),
+            body,
+        );
+    } else {
+        let rows: Vec<_> = picker
+            .options
+            .iter()
+            .map(|m| ListItem::new(m.name()))
+            .collect();
+        frame.render_stateful_widget(
+            List::new(rows).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+            body,
+            &mut picker.list,
+        );
+    }
+    frame.render_widget(
+        Paragraph::new(if picker.confirming {
+            "y merge · any other key returns to picker"
+        } else {
+            "j/k move · enter confirm · esc/q cancel"
+        })
+        .wrap(Wrap { trim: false }),
         footer,
     );
 }

@@ -3,11 +3,25 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-use crate::linear;
+use crate::{linear, merge::MergeMethod};
 
 #[derive(Deserialize)]
 struct ConfigFile {
     accounts: Vec<Entry>,
+    #[serde(flatten)]
+    merge: MergeOptions,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(default)]
+pub struct MergeOptions {
+    pub enable_merge: bool,
+    pub merge_method: MergeMethod,
+}
+
+pub struct Config {
+    pub accounts: Vec<AccountConfig>,
+    pub merge: MergeOptions,
 }
 
 #[derive(Deserialize)]
@@ -32,7 +46,7 @@ pub fn config_path() -> PathBuf {
     PathBuf::from(home).join(".config/herdr-linear/config.toml")
 }
 
-pub fn load() -> Result<Vec<AccountConfig>> {
+pub fn load() -> Result<Config> {
     let path = config_path();
     let text = match read_config(&path)? {
         Some(text) => text,
@@ -40,10 +54,13 @@ pub fn load() -> Result<Vec<AccountConfig>> {
             // No config file: fall back to the single-key setup.
             let key = linear::api_key()
                 .map_err(|_| format!("no config at {} and no LINEAR_API_KEY set", path.display()));
-            return Ok(vec![AccountConfig {
-                name: "linear".into(),
-                key,
-            }]);
+            return Ok(Config {
+                accounts: vec![AccountConfig {
+                    name: "linear".into(),
+                    key,
+                }],
+                merge: MergeOptions::default(),
+            });
         }
     };
     let file: ConfigFile =
@@ -51,7 +68,10 @@ pub fn load() -> Result<Vec<AccountConfig>> {
     if file.accounts.is_empty() {
         bail!("{} has no [[accounts]]", path.display());
     }
-    Ok(file.accounts.into_iter().map(resolve).collect())
+    Ok(Config {
+        accounts: file.accounts.into_iter().map(resolve).collect(),
+        merge: file.merge,
+    })
 }
 
 fn read_config(path: &std::path::Path) -> Result<Option<String>> {
@@ -104,8 +124,24 @@ mod tests {
             "[[accounts]]\nname = \"work\"\nkey_env = \"A\"\n[[accounts]]\nname = \"personal\"\nkey_file = \"~/k\"\n",
         )
         .unwrap();
+        assert!(!file.merge.enable_merge);
+        assert_eq!(file.merge.merge_method, MergeMethod::Squash);
         assert_eq!(file.accounts.len(), 2);
         assert_eq!(file.accounts[1].key_file.as_deref(), Some("~/k"));
+    }
+
+    #[test]
+    fn merge_is_explicitly_opt_in_and_method_is_validated() {
+        let file: ConfigFile = toml::from_str(
+            "enable_merge = true\nmerge_method = \"rebase\"\n[[accounts]]\nname = \"example\"\n",
+        )
+        .unwrap();
+        assert!(file.merge.enable_merge);
+        assert_eq!(file.merge.merge_method, MergeMethod::Rebase);
+        assert!(toml::from_str::<ConfigFile>(
+            "merge_method = \"auto\"\n[[accounts]]\nname = \"example\"\n"
+        )
+        .is_err());
     }
 
     #[test]

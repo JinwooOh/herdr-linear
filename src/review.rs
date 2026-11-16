@@ -9,7 +9,7 @@ use ratatui::{
 use serde::Deserialize;
 use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
 
-use crate::{github::pr_args, worker::Job};
+use crate::{github::pr_args, merge::MergeMethod, worker::Job};
 
 type FullFile = Vec<Line<'static>>;
 
@@ -138,8 +138,19 @@ pub fn load_readiness(pr_url: &str) -> Result<Readiness> {
     serde_json::from_slice(&gh(&args)?).context("could not read PR status")
 }
 
+pub struct MergePicker {
+    pub options: Vec<MergeMethod>,
+    pub list: ListState,
+    pub confirming: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 pub struct Review {
     pub title: String,
+    pub merge_picker: Option<MergePicker>,
+    pub merged: bool,
+    pub merge_message: Option<String>,
     pub snapshot: Option<Box<PrSnapshot>>,
     pub readiness: Option<Result<Readiness, String>>,
     pub readiness_loading: bool,
@@ -161,6 +172,9 @@ impl Review {
         }
         Self {
             title,
+            merge_picker: None,
+            merged: false,
+            merge_message: None,
             snapshot: None,
             readiness: None,
             readiness_loading: false,
@@ -181,7 +195,25 @@ impl Review {
         review
     }
 
+    pub fn can_merge(&self) -> bool {
+        !self.merged
+            && !self.readiness_loading
+            && self.snapshot.as_ref().is_some_and(|snapshot| {
+                self.readiness.as_ref().is_some_and(|result| {
+                    result.as_ref().is_ok_and(|status| {
+                        status.head_ref_oid == snapshot.head_sha
+                            && status.state == "OPEN"
+                            && !status.is_draft
+                            && status.mergeable != "CONFLICTING"
+                    })
+                })
+            })
+    }
+
     pub fn readiness_line(&self) -> String {
+        if self.merged {
+            return "Merged · merging disabled".into();
+        }
         let Some(snapshot) = &self.snapshot else {
             return "PR status unavailable (no snapshot)".into();
         };
@@ -192,12 +224,16 @@ impl Review {
             None => "loading status…".into(),
         };
         crate::display::safe(&format!(
-            "head {head} · {status}{}",
+            "head {head} · {status}{}{}",
             if self.readiness_loading && self.readiness.is_some() {
                 " · refreshing…"
             } else {
                 ""
-            }
+            },
+            self.merge_message
+                .as_ref()
+                .map(|message| format!(" · {message}"))
+                .unwrap_or_default()
         ))
     }
 

@@ -10,9 +10,10 @@ use ratatui::{
 };
 
 use crate::{
-    config::AccountConfig,
+    config::{AccountConfig, MergeOptions},
     linear,
-    review::{self, Review},
+    merge::{self, MergeMethod},
+    review::{self, MergePicker, PrSnapshot, Review},
     ui,
     worker::Job,
 };
@@ -160,6 +161,17 @@ struct PendingReadiness {
     result: Job<review::Readiness>,
 }
 
+struct PendingMethods {
+    generation: u64,
+    snapshot: PrSnapshot,
+    job: Job<Vec<MergeMethod>>,
+}
+
+struct PendingMerge {
+    snapshot: PrSnapshot,
+    job: Job<()>,
+}
+
 struct PendingMutation {
     account: usize,
     issue_id: String,
@@ -181,6 +193,10 @@ pub struct App {
     pending_readiness: Option<PendingReadiness>,
     review_generation: u64,
     pending_mutation: Option<PendingMutation>,
+    pub merge_options: MergeOptions,
+    pending_methods: Option<PendingMethods>,
+    merge_request: Option<(PrSnapshot, MergeMethod)>,
+    pending_merge: Option<PendingMerge>,
 }
 
 impl App {
@@ -197,6 +213,10 @@ impl App {
             pending_readiness: None,
             review_generation: 0,
             pending_mutation: None,
+            merge_options: MergeOptions::default(),
+            pending_methods: None,
+            merge_request: None,
+            pending_merge: None,
         }
     }
 
@@ -279,6 +299,7 @@ impl App {
         self.poll_mutation();
         self.rebuild_queue(selected);
         self.poll_review();
+        self.poll_merge();
         self.poll_readiness();
         if let View::Review(review) = &mut self.view {
             review.poll_file();
@@ -350,6 +371,14 @@ impl App {
         }
         if matches!(self.view, View::PrPicker(_) | View::StatePicker(_)) {
             self.picker_key(code);
+            return;
+        }
+        if matches!(&self.view, View::Review(review) if review.merge_picker.is_some()) {
+            self.merge_picker_key(code);
+            return;
+        }
+        if code == KeyCode::Char('m') && matches!(self.view, View::Review(_)) {
+            self.open_merge_picker();
             return;
         }
         if let View::Review(review) = &mut self.view {
@@ -592,6 +621,10 @@ impl App {
         let Some(snapshot) = &review.snapshot else {
             return;
         };
+        // Do not refresh underneath a merge confirmation or overwrite a known success.
+        if review.merged || review.merge_picker.is_some() || self.pending_merge.is_some() {
+            return;
+        }
         if review
             .readiness_started
             .is_some_and(|started| started.elapsed() < REFRESH_INTERVAL)
@@ -609,6 +642,196 @@ impl App {
                 });
             }
             Err(error) => review.readiness = Some(Err(error)),
+        }
+    }
+
+    fn open_merge_picker(&mut self) {
+        if !self.merge_options.enable_merge
+            || self.pending_merge.is_some()
+            || self.merge_request.is_some()
+        {
+            return;
+        }
+        let View::Review(review) = &mut self.view else {
+            return;
+        };
+        if !review.can_merge() {
+            self.status = Some("Merge unavailable: refresh PR status or reopen the PR.".into());
+            return;
+        }
+        review.merge_picker = Some(MergePicker {
+            options: Vec::new(),
+            list: ListState::default(),
+            confirming: false,
+            loading: true,
+            error: None,
+        });
+    }
+
+    fn merge_picker_key(&mut self, code: KeyCode) {
+        let View::Review(review) = &mut self.view else {
+            return;
+        };
+        let Some(picker) = &mut review.merge_picker else {
+            return;
+        };
+        if picker.confirming {
+            picker.confirming = false;
+            if code == KeyCode::Char('y') {
+                let method = picker
+                    .list
+                    .selected()
+                    .and_then(|i| picker.options.get(i))
+                    .copied();
+                if self.merge_options.enable_merge
+                    && self.pending_merge.is_none()
+                    && self.merge_request.is_none()
+                    && review.can_merge()
+                {
+                    if let (Some(snapshot), Some(method)) = (&review.snapshot, method) {
+                        self.merge_request = Some((snapshot.as_ref().clone(), method));
+                        // Any pre-write status result is now stale, but retain its job
+                        // until completion to keep worker concurrency bounded.
+                        self.review_generation += 1;
+                        review.readiness_loading = false;
+                        review.merge_message =
+                            Some("Merging… (submitted changes cannot be cancelled)".into());
+                    }
+                }
+                review.merge_picker = None;
+            }
+            // Even Esc only returns to the picker from confirmation.
+            return;
+        }
+        let len = picker.options.len();
+        match code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Backspace => review.merge_picker = None,
+            KeyCode::Char('j') | KeyCode::Down if len > 0 => {
+                picker
+                    .list
+                    .select(Some((picker.list.selected().unwrap_or(0) + 1).min(len - 1)));
+            }
+            KeyCode::Char('k') | KeyCode::Up if len > 0 => {
+                picker
+                    .list
+                    .select(Some(picker.list.selected().unwrap_or(0).saturating_sub(1)));
+            }
+            KeyCode::Enter if picker.list.selected().is_some() => picker.confirming = true,
+            _ => {}
+        }
+    }
+
+    fn poll_merge(&mut self) {
+        self.poll_merge_with(
+            |snapshot| Job::spawn(move || merge::load_methods(&snapshot)),
+            |snapshot, method| Job::spawn(move || merge::submit(&snapshot, method)),
+        );
+    }
+
+    /// Jobs are injected at the App workflow seam; tests never invoke a write API.
+    fn poll_merge_with(
+        &mut self,
+        methods: impl FnOnce(PrSnapshot) -> Result<Job<Vec<MergeMethod>>, String>,
+        submit: impl FnOnce(PrSnapshot, MergeMethod) -> Result<Job<()>, String>,
+    ) {
+        if let Some(result) = self.pending_merge.as_ref().and_then(|p| p.job.poll()) {
+            let pending = self.pending_merge.take().expect("pending merge exists");
+            if let View::Review(review) = &mut self.view {
+                if review.snapshot.as_deref() == Some(&pending.snapshot) {
+                    match result {
+                        Ok(()) => {
+                            review.merged = true;
+                            review.merge_message = None;
+                        }
+                        Err(_) => {
+                            review.merge_message = Some(
+                                "Merge outcome unknown; refresh status before retrying".into(),
+                            );
+                            // A failed/timeout write may have succeeded. Require a fresh status.
+                            review.readiness = None;
+                            review.readiness_started = None;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(result) = self.pending_methods.as_ref().and_then(|p| p.job.poll()) {
+            let pending = self.pending_methods.take().expect("pending methods exist");
+            if let View::Review(review) = &mut self.view {
+                if pending.generation == self.review_generation
+                    && review.snapshot.as_deref() == Some(&pending.snapshot)
+                {
+                    if let Some(picker) = &mut review.merge_picker {
+                        picker.loading = false;
+                        match result {
+                            Ok(options) => {
+                                let selected = options
+                                    .iter()
+                                    .position(|m| *m == self.merge_options.merge_method)
+                                    .or_else(|| {
+                                        options.iter().position(|m| *m == MergeMethod::Squash)
+                                    })
+                                    .or_else(|| (!options.is_empty()).then_some(0));
+                                picker.list.select(selected);
+                                if options.is_empty() {
+                                    picker.error =
+                                        Some("Repository allows no merge methods.".into());
+                                }
+                                picker.options = options;
+                            }
+                            Err(_) => {
+                                picker.error = Some(
+                                    "Could not load repository merge methods; cancel and retry."
+                                        .into(),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some((snapshot, method)) = self.merge_request.take() {
+            // A queued request contains the confirmed identity, never current selection.
+            match submit(snapshot.clone(), method) {
+                Ok(job) => self.pending_merge = Some(PendingMerge { snapshot, job }),
+                Err(_) => {
+                    if let View::Review(review) = &mut self.view {
+                        if review.snapshot.as_deref() == Some(&snapshot) {
+                            review.merge_message =
+                                Some("Could not start merge worker; no merge submitted.".into());
+                        }
+                    }
+                }
+            }
+        }
+        if self.pending_methods.is_some() {
+            return;
+        }
+        let View::Review(review) = &mut self.view else {
+            return;
+        };
+        let Some(picker) = &mut review.merge_picker else {
+            return;
+        };
+        if !picker.loading {
+            return;
+        }
+        let Some(snapshot) = review.snapshot.as_deref().cloned() else {
+            return;
+        };
+        match methods(snapshot.clone()) {
+            Ok(job) => {
+                self.pending_methods = Some(PendingMethods {
+                    generation: self.review_generation,
+                    snapshot,
+                    job,
+                })
+            }
+            Err(_) => {
+                picker.loading = false;
+                picker.error =
+                    Some("Could not start repository methods worker; cancel and retry.".into());
+            }
         }
     }
 

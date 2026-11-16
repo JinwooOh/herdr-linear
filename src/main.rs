@@ -4,6 +4,7 @@ mod display;
 mod github;
 mod launch;
 mod linear;
+mod merge;
 mod process;
 mod review;
 mod ui;
@@ -22,8 +23,9 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
-    let accounts = config::load()?;
-    let mut app = app::App::new(accounts);
+    let config = config::load()?;
+    let mut app = app::App::new(config.accounts);
+    app.merge_options = config.merge;
 
     let mut terminal = ratatui::init();
     worker::install_panic_hook();

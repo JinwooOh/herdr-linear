@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod merge_tests;
+
 fn issue(id: &str, review: bool) -> linear::Issue {
     serde_json::from_value(json!({"id":id,"identifier":"HL-1","title":id,"url":"https://linear.app/test","priority":0,"branchName":"test","updatedAt":"2026-01-01T00:00:00Z","team":{"id":"team"},"state":{"id":"s","name":if review {"In Review"} else {"Todo"},"type":"started"},"attachments":{"nodes":[]}})).unwrap()
 }
@@ -750,6 +752,7 @@ fn readiness_and_all_pr_footer_keys_fit_at_sixty_columns() {
         "h/l horizontal",
         "f full/diff (toggle to retry)",
         "r status",
+        "m merge",
         "esc/q back",
         "Ctrl+C quit",
     ] {
