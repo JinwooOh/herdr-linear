@@ -13,14 +13,18 @@ mod worker;
 use anyhow::Result;
 
 fn main() -> Result<()> {
-    if std::env::args().any(|a| a == "--launch-decision") {
+    let tab_mode = std::env::args().any(|a| a == "--launch-decision-tab");
+    if tab_mode || std::env::args().any(|a| a == "--launch-decision") {
         use std::io::Read;
         let mut json = String::new();
         std::io::stdin().take(4_000_000).read_to_string(&mut json)?;
-        println!(
-            "{}",
-            launch::decision(&json, std::env::var("HERDR_TAB_ID").ok().as_deref())
-        );
+        let caller_tab = std::env::var("HERDR_TAB_ID").ok();
+        let decide = if tab_mode {
+            launch::decision_tab
+        } else {
+            launch::decision
+        };
+        println!("{}", decide(&json, caller_tab.as_deref()));
         return Ok(());
     }
     let config = config::load()?;

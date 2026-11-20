@@ -17,31 +17,65 @@ struct Pane {
     focused: bool,
 }
 
+impl Pane {
+    fn is_linear(&self) -> bool {
+        self.label.as_deref() == Some("Linear")
+    }
+}
+
 /// Reuse within the caller's tab only. Never close on repeated launches.
 pub fn decision(json: &str, caller_tab: Option<&str>) -> String {
-    let Ok(response) = serde_json::from_str::<Response>(json) else {
+    let Some((panes, tab)) = parse(json, caller_tab) else {
         return "OPEN".into();
     };
-    let panes = response.result.panes;
-    let tab = caller_tab.or_else(|| panes.iter().find(|p| p.focused).map(|p| p.tab_id.as_str()));
-    let Some(tab) = tab.filter(|s| !s.is_empty()) else {
+    focus_in_tab(&panes, &tab).unwrap_or_else(|| "OPEN".into())
+}
+
+/// Tab variant: reuse a Linear pane in the caller's tab, else switch to one in another tab
+/// of the same workspace, else open a new tab. Never close on repeated launches, so a
+/// supervised merge is not interrupted.
+pub fn decision_tab(json: &str, caller_tab: Option<&str>) -> String {
+    let Some((panes, tab)) = parse(json, caller_tab) else {
         return "OPEN".into();
     };
-    let pane = panes
-        .iter()
-        .find(|p| p.tab_id == tab && p.label.as_deref() == Some("Linear"));
-    match pane {
-        Some(p)
-            if !p.pane_id.is_empty()
-                && !p.pane_id.starts_with('-')
-                && p.pane_id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "_:.-".contains(c)) =>
-        {
-            format!("FOCUS {}", p.pane_id)
-        }
-        _ => "OPEN".into(),
+    if let Some(focus) = focus_in_tab(&panes, &tab) {
+        return focus;
     }
+    // Workspace comes from the `workspace:tab` id prefix; an unqualified id is unknown.
+    let Some((workspace, _)) = tab.split_once(':').filter(|(w, _)| !w.is_empty()) else {
+        return "OPEN".into();
+    };
+    panes
+        .iter()
+        .filter(|p| p.is_linear() && is_safe(&p.tab_id))
+        .find(|p| p.tab_id.split_once(':').map(|(w, _)| w) == Some(workspace))
+        .map_or_else(|| "OPEN".into(), |p| format!("SWITCHTAB {}", p.tab_id))
+}
+
+fn parse(json: &str, caller_tab: Option<&str>) -> Option<(Vec<Pane>, String)> {
+    let panes = serde_json::from_str::<Response>(json).ok()?.result.panes;
+    let tab = caller_tab
+        .or_else(|| panes.iter().find(|p| p.focused).map(|p| p.tab_id.as_str()))
+        .filter(|s| !s.is_empty())?
+        .to_owned();
+    Some((panes, tab))
+}
+
+fn focus_in_tab(panes: &[Pane], tab: &str) -> Option<String> {
+    panes
+        .iter()
+        .find(|p| p.tab_id == tab && p.is_linear())
+        .filter(|p| is_safe(&p.pane_id))
+        .map(|p| format!("FOCUS {}", p.pane_id))
+}
+
+/// An ID is safe to pass as an argument: non-empty, no leading `-`, `[A-Za-z0-9_:.-]` only.
+fn is_safe(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_:.-".contains(c))
 }
 #[cfg(test)]
 mod tests {
@@ -54,5 +88,50 @@ mod tests {
         assert_eq!(decision("invalid", None), "OPEN");
         assert_eq!(decision(&input.replace("w1:p1", "--bad"), None), "OPEN");
         assert_eq!(decision(r#"{"result":{"panes":[]}}"#, None), "OPEN");
+    }
+
+    fn list(panes: &[(&str, &str, bool, &str)]) -> String {
+        let panes: Vec<_> = panes
+            .iter()
+            .map(|(id, tab, focused, label)| {
+                format!(
+                    r#"{{"pane_id":"{id}","tab_id":"{tab}","focused":{focused},"label":"{label}"}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"result":{{"panes":[{}]}}}}"#, panes.join(","))
+    }
+
+    #[test]
+    fn tab_launch_reuses_this_workspace_and_never_closes() {
+        let here = list(&[("w1:p1", "w1:t1", true, "Linear")]);
+        assert_eq!(decision_tab(&here, None), "FOCUS w1:p1");
+
+        let elsewhere = list(&[
+            ("w1:p1", "w1:t1", true, "zsh"),
+            ("w1:p2", "w1:t2", false, "Linear"),
+        ]);
+        assert_eq!(decision_tab(&elsewhere, None), "SWITCHTAB w1:t2");
+        assert_eq!(decision_tab(&elsewhere, Some("w1:t1")), "SWITCHTAB w1:t2");
+
+        let other_workspace = list(&[
+            ("w1:p1", "w1:t1", true, "zsh"),
+            ("w2:p2", "w2:t2", false, "Linear"),
+        ]);
+        assert_eq!(decision_tab(&other_workspace, None), "OPEN");
+    }
+
+    #[test]
+    fn tab_launch_opens_when_unsure() {
+        assert_eq!(decision_tab("invalid", None), "OPEN");
+        let none = list(&[("w1:p1", "w1:t1", true, "zsh")]);
+        assert_eq!(decision_tab(&none, None), "OPEN");
+        let unqualified = list(&[("p1", "t1", true, "zsh"), ("p2", "t2", false, "Linear")]);
+        assert_eq!(decision_tab(&unqualified, None), "OPEN");
+        let unsafe_tab = list(&[
+            ("w1:p1", "w1:t1", true, "zsh"),
+            ("w1:p2", "-w1:t2", false, "Linear"),
+        ]);
+        assert_eq!(decision_tab(&unsafe_tab, None), "OPEN");
     }
 }

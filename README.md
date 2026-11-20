@@ -226,18 +226,29 @@ herdr plugin pane open --plugin herdr-linear --entrypoint issues --placement spl
 
 `scripts/open.sh` focuses an existing Linear pane in the current tab instead of opening a duplicate.
 
+To open the pane in its own tab instead, invoke `herdr-linear.open-issues-tab`
+(`scripts/open-tab.sh`). It focuses a Linear pane in the current tab, otherwise switches to a tab
+in the same Herdr workspace that already has one, otherwise opens a new tab. A Linear pane in
+another Herdr workspace is left alone. Neither launcher closes the pane when invoked again.
+
 Optional launcher binding in `~/.config/herdr/config.toml` (choose an unused key first):
 
 ```toml
 [[keys.command]]
-key = "prefix+shift+l"
+key = "prefix+i"
 type = "plugin_action"
 command = "herdr-linear.open-issues"
 description = "open Linear pane"
+
+[[keys.command]]
+key = "prefix+shift+i"
+type = "plugin_action"
+command = "herdr-linear.open-issues-tab"
+description = "open Linear pane in tab"
 ```
 
 Then run `herdr server reload-config`. This is an example, not an automatically installed binding.
-With a `ctrl+a` prefix, the example is `Ctrl+A`, then `Shift+L`.
+With a `ctrl+a` prefix, the example is `Ctrl+A`, then `i` (or `Shift+I` for the tab).
 
 ## Local development
 

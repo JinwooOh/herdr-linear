@@ -19,3 +19,9 @@ id = "open-issues"
 title = "Open Linear issues"
 description = "Open the Linear issues pane in a split beside the current work."
 command = ["bash", "scripts/open.sh"]
+
+[[actions]]
+id = "open-issues-tab"
+title = "Open Linear issues (tab)"
+description = "Open the Linear issues pane in its own tab, or switch to it if already open."
+command = ["bash", "scripts/open-tab.sh"]
