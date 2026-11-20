@@ -52,6 +52,33 @@ pub fn decision_tab(json: &str, caller_tab: Option<&str>) -> String {
         .map_or_else(|| "OPEN".into(), |p| format!("SWITCHTAB {}", p.tab_id))
 }
 
+#[derive(Deserialize)]
+struct Opened {
+    result: OpenedResult,
+}
+#[derive(Deserialize)]
+struct OpenedResult {
+    plugin_pane: OpenedPane,
+}
+#[derive(Deserialize)]
+struct OpenedPane {
+    pane: OpenedTab,
+}
+#[derive(Deserialize)]
+struct OpenedTab {
+    tab_id: String,
+}
+
+/// The tab of a pane from `plugin pane open` output, so the launcher can switch to it:
+/// `--focus` does not switch tabs. Empty when the output is unusable.
+pub fn opened_tab(json: &str) -> String {
+    serde_json::from_str::<Opened>(json)
+        .map(|o| o.result.plugin_pane.pane.tab_id)
+        .ok()
+        .filter(|t| is_safe(t))
+        .unwrap_or_default()
+}
+
 fn parse(json: &str, caller_tab: Option<&str>) -> Option<(Vec<Pane>, String)> {
     let panes = serde_json::from_str::<Response>(json).ok()?.result.panes;
     let tab = caller_tab
@@ -119,6 +146,14 @@ mod tests {
             ("w2:p2", "w2:t2", false, "Linear"),
         ]);
         assert_eq!(decision_tab(&other_workspace, None), "OPEN");
+    }
+
+    #[test]
+    fn opened_tab_is_validated() {
+        let opened = r#"{"id":"x","result":{"type":"plugin_pane_opened","plugin_pane":{"plugin_id":"herdr-linear","entrypoint":"issues","pane":{"pane_id":"w1:p9","tab_id":"w1:t9"}}}}"#;
+        assert_eq!(opened_tab(opened), "w1:t9");
+        assert_eq!(opened_tab(&opened.replace("w1:t9", "-w1:t9")), "");
+        assert_eq!(opened_tab("invalid"), "");
     }
 
     #[test]

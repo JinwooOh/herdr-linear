@@ -13,6 +13,13 @@ mod worker;
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    if std::env::args().any(|a| a == "--opened-tab") {
+        use std::io::Read;
+        let mut json = String::new();
+        std::io::stdin().take(1_000_000).read_to_string(&mut json)?;
+        println!("{}", launch::opened_tab(&json));
+        return Ok(());
+    }
     let tab_mode = std::env::args().any(|a| a == "--launch-decision-tab");
     if tab_mode || std::env::args().any(|a| a == "--launch-decision") {
         use std::io::Read;

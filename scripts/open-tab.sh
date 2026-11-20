@@ -5,7 +5,13 @@ herdr_bin="${HERDR_BIN_PATH:-herdr}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 viewer_bin="$script_dir/../target/release/herdr-linear"
 open_tab() {
-  exec "$herdr_bin" plugin pane open --plugin herdr-linear --entrypoint issues --placement tab --focus
+  if [ ! -x "$viewer_bin" ]; then
+    exec "$herdr_bin" plugin pane open --plugin herdr-linear --entrypoint issues --placement tab --focus
+  fi
+  opened="$("$herdr_bin" plugin pane open --plugin herdr-linear --entrypoint issues --placement tab --focus)" || exit
+  # `--focus` does not switch tabs; switch to the new tab explicitly (ID validated in Rust).
+  tab="$(printf '%s' "$opened" | "$viewer_bin" --opened-tab 2>/dev/null || true)"
+  if [ -n "$tab" ]; then "$herdr_bin" tab focus "$tab" >/dev/null; fi
 }
 if [ -x "$viewer_bin" ]; then
   panes="$("$herdr_bin" pane list 2>/dev/null || true)"
