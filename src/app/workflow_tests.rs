@@ -805,3 +805,105 @@ fn full_file_and_state_loads_use_the_loading_box() {
     let text = render(&mut app);
     assert!(text.contains("Linear HTTP 401") && !text.contains("Loading team states"));
 }
+
+fn assigned(id: &str, assignee: Option<(&str, &str, bool)>) -> linear::Issue {
+    let mut issue = issue(id, false);
+    issue.assignee = assignee.map(|(name, display_name, is_me)| linear::Assignee {
+        id: format!("user-{display_name}"),
+        name: name.into(),
+        display_name: display_name.into(),
+        is_me,
+    });
+    issue
+}
+fn buffer(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui::draw(f, app)).unwrap();
+    terminal.backend().buffer().clone()
+}
+/// The row text on screen and the cell where `label` starts in it.
+fn find(buffer: &ratatui::buffer::Buffer, row_text: &str, label: &str) -> (String, u16, u16) {
+    let area = buffer.area;
+    for y in 0..area.height {
+        let line: String = (0..area.width).map(|x| buffer[(x, y)].symbol()).collect();
+        if line.contains(row_text) {
+            let start = line
+                .find(label)
+                .unwrap_or_else(|| panic!("{label} not in {line}"));
+            let x = line[..start].chars().count() as u16;
+            return (line, x, y);
+        }
+    }
+    panic!("{row_text} not on screen")
+}
+#[test]
+fn rows_show_you_display_name_or_unassigned() {
+    let mut app = app();
+    app.accounts[0].apply_snapshot(vec![
+        assigned("mine", Some(("Jinwoo Oh", "jinwoo", true))),
+        assigned("theirs", Some(("Ada Lovelace", "ada", false))),
+        assigned("nobody", None),
+    ]);
+    app.poll_background();
+    let screen = buffer(&mut app, 120, 30);
+
+    let (line, x, y) = find(&screen, "mine", "you ");
+    assert!(!line.contains("jinwoo"), "{line}");
+    assert_eq!(screen[(x, y)].fg, ratatui::style::Color::Green);
+    assert!(screen[(x, y)]
+        .modifier
+        .contains(ratatui::style::Modifier::BOLD));
+
+    let (_, x, y) = find(&screen, "theirs", "ada ");
+    assert_eq!(screen[(x, y)].fg, ratatui::style::Color::Reset);
+
+    let (_, x, y) = find(&screen, "nobody", "Unassigned");
+    assert_eq!(screen[(x, y)].fg, ratatui::style::Color::DarkGray);
+}
+#[test]
+fn assignee_column_is_fixed_width_and_keeps_titles_on_narrow_panes() {
+    let mut app = app();
+    app.accounts[0].apply_snapshot(vec![
+        assigned("title-one", Some(("Long", "김진우김진우김진우", false))),
+        assigned("title-two", Some(("Short", "ada", false))),
+        assigned("title-three", None),
+    ]);
+    app.poll_background();
+    app.on_key(KeyCode::Char('a'));
+    let screen = buffer(&mut app, 60, 30);
+    let (one, x_one, _) = find(&screen, "title-one", "title-one");
+    let (_, x_two, _) = find(&screen, "title-two", "title-two");
+    let (_, x_three, _) = find(&screen, "title-three", "title-three");
+    assert_eq!(x_one, x_two);
+    assert_eq!(x_one, x_three);
+    assert!(one.contains('…'), "long names are truncated: {one}");
+    assert!(!one.contains("김진우김진우김진우"), "{one}");
+}
+#[test]
+fn detail_pane_shows_assignee_full_name_or_unassigned() {
+    let mut app = app();
+    app.accounts[0].apply_snapshot(vec![assigned(
+        "theirs",
+        Some(("Ada Lovelace", "ada", false)),
+    )]);
+    app.poll_background();
+    assert!(render(&mut app).contains("Assignee: Ada Lovelace"));
+    app.accounts[0].apply_snapshot(vec![assigned("nobody", None)]);
+    assert!(render(&mut app).contains("Assignee: Unassigned"));
+}
+#[test]
+fn assignee_names_are_sanitized_like_titles() {
+    let mut app = app();
+    app.accounts[0].apply_snapshot(vec![assigned(
+        "sneaky",
+        Some(("Ada\u{202e}Lovelace", "\u{200b}x", false)),
+    )]);
+    app.poll_background();
+    let text = render(&mut app);
+    assert!(text.contains("<U+200B>x"), "row name: {text}");
+    assert!(
+        text.contains("Assignee: Ada<U+202E>Lovelace"),
+        "detail: {text}"
+    );
+}

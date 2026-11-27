@@ -347,8 +347,45 @@ fn list_row(issue: &Issue) -> Line<'static> {
                 Color::Gray
             }),
         ),
+        assignee_cell(issue),
         Span::raw(crate::display::safe(&issue.title)),
     ])
+}
+
+/// Display columns the row's assignee label may use, before its trailing space.
+const ASSIGNEE_WIDTH: usize = "Unassigned".len();
+
+/// `you` highlighted, the display name plain, or `Unassigned` dimmed, padded to a fixed width.
+fn assignee_cell(issue: &Issue) -> Span<'static> {
+    let (label, style) = match &issue.assignee {
+        Some(a) if a.is_me => (
+            "you".to_string(),
+            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ),
+        Some(a) => (crate::display::safe(&a.display_name), Style::new()),
+        None => ("Unassigned".to_string(), Style::new().fg(Color::DarkGray)),
+    };
+    Span::styled(format!("{} ", fit(&label, ASSIGNEE_WIDTH)), style)
+}
+
+/// Pad or truncate `text` to exactly `width` display columns, ending cut text with `…`.
+fn fit(text: &str, width: usize) -> String {
+    let columns = |s: &str| Span::raw(s).width();
+    if columns(text) <= width {
+        return format!("{text}{}", " ".repeat(width - columns(text)));
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        let mut next = out.clone();
+        next.push(c);
+        if columns(&next) + 1 > width {
+            break;
+        }
+        out = next;
+    }
+    out.push('…');
+    let used = columns(&out);
+    out + &" ".repeat(width - used)
 }
 
 fn detail_lines(issue: &Issue) -> Vec<Line<'static>> {
@@ -360,6 +397,13 @@ fn detail_lines(issue: &Issue) -> Vec<Line<'static>> {
         )),
         Line::from(""),
         Line::from(format!("State:    {}", issue.state.name)),
+        Line::from(format!(
+            "Assignee: {}",
+            issue
+                .assignee
+                .as_ref()
+                .map_or("Unassigned".to_string(), |a| crate::display::safe(&a.name))
+        )),
         Line::from(format!("Priority: {}", issue.priority_label())),
         Line::from(format!("Branch:   {}", issue.branch_name)),
         Line::from(format!("Linear:   {}", issue.url)),

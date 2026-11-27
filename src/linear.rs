@@ -21,6 +21,7 @@ query($after: String) {
       nodes {
         id identifier title url priority branchName updatedAt
         team { id }
+        assignee { id name displayName isMe }
         state { id name type }
         attachments { nodes { title url sourceType } }
       }
@@ -41,6 +42,9 @@ pub struct Issue {
     pub branch_name: String,
     pub updated_at: String,
     pub team: Team,
+    /// `None` means the issue is Unassigned.
+    #[serde(default)]
+    pub assignee: Option<Assignee>,
     pub state: State,
     pub attachments: Attachments,
 }
@@ -48,6 +52,18 @@ pub struct Issue {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Team {
     pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Assignee {
+    /// Requested per the spec as the assignee's identity; nothing displays it yet.
+    #[allow(dead_code)]
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    /// Linear's `isMe`: the assignee is the Account's own user.
+    pub is_me: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

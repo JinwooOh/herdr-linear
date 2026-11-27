@@ -159,3 +159,38 @@ fn detects_prs_by_url_not_source_type_and_filters_terminal_states() {
     i.state.kind = "completed".into();
     assert!(!i.is_open());
 }
+#[test]
+fn assignee_decodes_including_unassigned() {
+    let with = |assignee: Value| -> Issue {
+        let mut value = json!({"id":"a","identifier":"HL-1","title":"test","url":"https://linear.app/test","priority":0,"branchName":"test","updatedAt":"1","team":{"id":"team"},"state":{"id":"s","name":"Todo","type":"unstarted"},"attachments":{"nodes":[]}});
+        value["assignee"] = assignee;
+        serde_json::from_value(value).unwrap()
+    };
+    let me = json!({"id":"u1","name":"Jinwoo Oh","displayName":"jinwoo","isMe":true});
+    let issues = collect_pages(|_| Ok(page(vec![with(me.clone())], None))).unwrap();
+    let assignee = issues[0].assignee.as_ref().unwrap();
+    assert_eq!(assignee.id, "u1");
+    assert_eq!(assignee.name, "Jinwoo Oh");
+    assert_eq!(assignee.display_name, "jinwoo");
+    assert!(assignee.is_me);
+
+    let unassigned = collect_pages(|_| Ok(page(vec![with(Value::Null)], None))).unwrap();
+    assert_eq!(unassigned.len(), 1);
+    assert!(unassigned[0].assignee.is_none());
+    // An issue decoded without the field at all is also Unassigned.
+    assert!(issue("b", "1").assignee.is_none());
+}
+#[test]
+fn assigned_issues_query_requests_the_assignee() {
+    let assignee = QUERY
+        .split("assignee {")
+        .nth(1)
+        .expect("query requests assignee");
+    let fields = &assignee[..assignee.find('}').unwrap()];
+    for field in ["id", "name", "displayName", "isMe"] {
+        assert!(
+            fields.split_whitespace().any(|f| f == field),
+            "missing {field} in {fields}"
+        );
+    }
+}
