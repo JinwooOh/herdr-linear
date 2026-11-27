@@ -910,26 +910,26 @@ fn assignee_column_hides_when_it_would_crowd_out_titles() {
         assigned("drop-legacy-flags", None),
     ]);
     app.poll_background();
-    // 80 columns puts the list in the left 45%: 36 cells including borders. Without the
-    // assignee column an Account tab row leaves the title 13 cells; the All-accounts queue's
-    // `[work] ` prefix leaves it 6, the same as before the assignee column existed.
-    for (all, titles) in [
-        (false, ["fix-login-", "add-billin", "drop-legac"]),
-        (true, ["fix-lo", "add-bi", "drop-l"]),
-    ] {
+    // 110 columns is the narrowest side-by-side layout (HL-34): the list gets 50 cells with
+    // borders, 48 inside. An Account tab row fits identifier 9 + state 12 + assignee 11 and
+    // a 16-cell title. The All-accounts queue's `[work] ` prefix would leave the title 9, so
+    // the queue row drops the assignee.
+    for (all, shown) in [(false, true), (true, false)] {
         if all {
             app.on_key(KeyCode::Char('a'));
         }
-        let screen = buffer(&mut app, 80, 24);
-        let rows = list_pane_rows(&screen, 36);
-        for title in titles {
+        let screen = buffer(&mut app, 110, 24);
+        let rows = list_pane_rows(&screen, 50);
+        for (title, label) in [
+            ("fix-login-redire", "you"),
+            ("add-billing-expo", "ada"),
+            ("drop-legacy-flag", "Unassigned"),
+        ] {
             let row = rows
                 .iter()
                 .find(|r| r.contains(title))
                 .unwrap_or_else(|| panic!("{title} missing (queue: {all}): {rows:#?}"));
-            for label in ["you", "jinwoo", "ada", "Unassigned", "Unassi"] {
-                assert!(!row.contains(label), "{label} in {row} (queue: {all})");
-            }
+            assert_eq!(row.contains(label), shown, "{label} in {row} (queue: {all})");
         }
     }
     // The detail pane keeps the assignee.
