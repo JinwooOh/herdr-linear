@@ -8,15 +8,10 @@ use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 const ENDPOINT: &str = "https://api.linear.app/graphql";
-const QUERY: &str = r#"
-query($after: String) {
-  viewer {
-    assignedIssues(
-      first: 100
-      after: $after
-      orderBy: updatedAt
-      filter: { state: { type: { nin: ["completed", "canceled"] } } }
-    ) {
+/// The page fields both Issue-scope queries request, so the two cannot drift apart.
+macro_rules! issue_page {
+    () => {
+        r#"
       pageInfo { hasNextPage endCursor }
       nodes {
         id identifier title url priority branchName updatedAt
@@ -25,10 +20,42 @@ query($after: String) {
         state { id name type }
         attachments { nodes { title url sourceType } }
       }
-    }
-  }
+"#
+    };
 }
-"#;
+/// Assigned issues.
+const QUERY: &str = concat!(
+    r#"
+query($after: String) {
+  viewer {
+    assignedIssues(
+      first: 100
+      after: $after
+      orderBy: updatedAt
+      filter: { state: { type: { nin: ["completed", "canceled"] } } }
+    ) {"#,
+    issue_page!(),
+    "    }\n  }\n}\n"
+);
+/// Team issues: every issue of a team the viewer belongs to, plus issues assigned to the viewer.
+const TEAM_QUERY: &str = concat!(
+    r#"
+query($after: String) {
+  issues(
+    first: 100
+    after: $after
+    orderBy: updatedAt
+    filter: {
+      state: { type: { nin: ["completed", "canceled"] } }
+      or: [
+        { team: { members: { some: { isMe: { eq: true } } } } }
+        { assignee: { isMe: { eq: true } } }
+      ]
+    }
+  ) {"#,
+    issue_page!(),
+    "  }\n}\n"
+);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -262,12 +289,23 @@ pub fn fetch_issues(key: &str) -> Result<Vec<Issue>> {
     })
 }
 
+pub fn fetch_team_issues(key: &str) -> Result<Vec<Issue>> {
+    #[derive(Deserialize)]
+    struct TeamData {
+        issues: Page,
+    }
+    collect_pages(|cursor| {
+        let data: TeamData = request(key, TEAM_QUERY, json!({"after": cursor}))?;
+        Ok(data.issues)
+    })
+}
+
 fn collect_pages(mut fetch: impl FnMut(Option<&str>) -> Result<Page>) -> Result<Vec<Issue>> {
     let mut cursor: Option<String> = None;
     let mut cursors = HashSet::new();
     let mut issues: HashMap<String, Issue> = HashMap::new();
     loop {
-        let page = fetch(cursor.as_deref()).context("could not load assigned issue page")?;
+        let page = fetch(cursor.as_deref()).context("could not load issue page")?;
         for issue in page.nodes {
             if issues
                 .get(&issue.id)
