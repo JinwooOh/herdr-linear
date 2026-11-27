@@ -64,6 +64,20 @@ fn the_first_switch_to_team_issues_starts_a_team_fetch_and_later_switches_start_
 }
 
 #[test]
+fn each_issue_scope_fetches_with_its_own_linear_query() {
+    // The workflow tests cannot see which fetch a credential-less Account would run.
+    let address = |fetch: issue_list::Fetch| fetch as usize;
+    assert_eq!(
+        address(IssueScope::Assigned.fetch()),
+        address(linear::fetch_issues)
+    );
+    assert_eq!(
+        address(IssueScope::Team.fetch()),
+        address(linear::fetch_team_issues)
+    );
+}
+
+#[test]
 fn a_later_switch_shows_the_stored_list_immediately_and_keeps_a_running_fetch() {
     let mut app = app();
     app.on_key(KeyCode::Char('t'));
