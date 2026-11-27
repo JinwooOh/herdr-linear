@@ -143,6 +143,32 @@ fn one_account_failure_does_not_erase_another_or_stale_data() {
     assert_eq!(app.queue.len(), 1);
 }
 #[test]
+fn account_tab_footer_shows_only_that_accounts_errors() {
+    let mut app = app();
+    app.accounts[0].list.error = Some("team fetch offline".into());
+    app.accounts[1].list.error = None;
+    let work = render(&mut app);
+    assert!(work.contains("work: team fetch offline"), "{work}");
+    app.on_key(KeyCode::Tab);
+    assert_eq!(app.active, 1);
+    let personal = render(&mut app);
+    assert!(!personal.contains("team fetch offline"), "{personal}");
+    assert!(personal.contains("work (0) !"), "{personal}");
+}
+#[test]
+fn all_accounts_queue_footer_shows_every_accounts_errors_with_names() {
+    let mut app = app();
+    app.accounts[0].list.error = Some("team fetch offline".into());
+    app.accounts[1].list.error = None;
+    app.on_key(KeyCode::Tab);
+    app.on_key(KeyCode::Tab);
+    assert!(app.all_accounts_queue());
+    let queue = render(&mut app);
+    assert!(queue.contains("work: team fetch offline"), "{queue}");
+    assert!(queue.contains("work (0) !"), "{queue}");
+    assert!(!queue.contains("personal (0) !"), "{queue}");
+}
+#[test]
 fn refresh_is_nonblocking_and_does_not_replace_an_active_request() {
     let mut app = app();
     let (release, waiter) = mpsc::channel();
