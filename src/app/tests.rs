@@ -210,3 +210,73 @@ fn cancelled_load_cannot_open_later_and_a_new_load_works() {
     assert!(matches!(app.view, View::Issues));
     assert_eq!(app.status.as_deref(), Some("new request failed"));
 }
+
+/// The All-accounts queue with one `personal` issue whose title is longer than the row.
+fn queue_with_long_title() -> App {
+    let mut app = app();
+    app.accounts[1].list.apply_snapshot(vec![serde_json::from_value(serde_json::json!({"id":"i","identifier":"HL-1","title":"abcdefghijklmnopqrstuvwxyz","url":"https://linear.app/test","priority":0,"branchName":"b","updatedAt":"2026-01-01T00:00:00Z","team":{"id":"team"},"state":{"id":"s","name":"Todo","type":"started"},"attachments":{"nodes":[]}})).unwrap()]);
+    app.poll_background();
+    app.on_key(KeyCode::Char('a'));
+    app
+}
+
+/// Side by side puts the Detail pane's title on the top row, beside the tab bar.
+fn side_by_side(text: &str) -> bool {
+    text.lines().next().unwrap().contains(" Detail ")
+}
+
+#[test]
+fn panes_stack_below_the_cutoff_that_keeps_queue_titles_16_cells() {
+    // "[personal] " 11 + identifier 9 + state 12 + title 16 = 48 cells inside the borders,
+    // so the list needs 50 columns. 45% of 110 is 49.5, which the layout rounds to 50;
+    // 45% of 109 is 49.05, which gives 49.
+    let mut app = queue_with_long_title();
+    let text = screen(&mut app, 109, 30);
+    assert!(!side_by_side(&text), "stacked at 109:\n{text}");
+    // Stacked rows use the full width, so the assignee and the whole title show.
+    assert!(
+        text.contains("[personal] HL-1     Todo        Unassigned abcdefghijklmnopqrstuvwxyz"),
+        "full-width row at 109:\n{text}"
+    );
+
+    let text = screen(&mut app, 110, 30);
+    assert!(side_by_side(&text), "side by side at 110:\n{text}");
+    // The list keeps its 45% share: the row ends after exactly 16 title cells.
+    assert!(
+        text.contains("│[personal] HL-1     Todo        abcdefghijklmnop││"),
+        "16 title cells at 110:\n{text}"
+    );
+}
+
+#[test]
+fn the_cutoff_follows_the_longest_account_name_on_every_account_tab() {
+    let mut app = App::new(
+        ["a", "longername"]
+            .map(|name| AccountConfig {
+                name: name.into(),
+                key: Err("test account".into()),
+            })
+            .into(),
+    );
+    // "[longername] " 13 + 9 + 12 + 16 = 50 inside the borders, so the list needs 52.
+    // 45% of 115 is 51.75 (52); 45% of 114 is 51.3 (51).
+    for active in [0, 1, 2] {
+        app.active = active;
+        assert!(!side_by_side(&screen(&mut app, 114, 30)), "tab {active} at 114");
+        assert!(side_by_side(&screen(&mut app, 115, 30)), "tab {active} at 115");
+    }
+}
+
+#[test]
+fn panes_stack_under_80_columns_even_with_a_one_letter_account() {
+    let mut app = App::new(
+        [AccountConfig {
+            name: "x".into(),
+            key: Err("test account".into()),
+        }]
+        .into(),
+    );
+    for width in [60, 79] {
+        assert!(!side_by_side(&screen(&mut app, width, 30)), "at {width}");
+    }
+}
