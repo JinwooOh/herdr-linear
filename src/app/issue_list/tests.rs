@@ -51,3 +51,15 @@ fn a_missing_key_records_the_error_without_starting_a_fetch() {
     assert!(!list.loading());
     assert_eq!(list.error.as_deref(), Some("work key unavailable"));
 }
+
+#[test]
+fn refresh_while_a_fetch_is_running_keeps_the_running_fetch() {
+    let mut list = IssueList::default();
+    let (sender, job) = Job::channel();
+    list.pending = Some(job);
+    list.refresh(&Ok("test-key".into()), fetch_two);
+    sender.send(Ok(vec![issue("running")])).unwrap();
+    wait(&mut list);
+    let ids: Vec<_> = list.issues.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["running"]);
+}
