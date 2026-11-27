@@ -11,8 +11,7 @@ User-facing docs and the planned-work list are in `README.md`. Do not duplicate 
 ## Commands
 
 ```sh
-cargo clippy --release --all-targets
-cargo test --release
+scripts/check             # quality gate: clippy (warnings are errors), tests, release build
 cargo build --release     # the user runs target/release/herdr-linear directly
 ```
 
@@ -20,10 +19,10 @@ cargo build --release     # the user runs target/release/herdr-linear directly
 
 ## Done means
 
-1. Clippy has no warnings and tests pass.
-2. `cargo build --release` was run. Clippy and test do not rebuild the binary the user launches.
-3. The footer hint in `src/ui.rs` lists any key you added or changed.
-4. Say what the user should press to try the change. Automated checks do not replace live-pane
+1. `scripts/check` passes. It runs clippy with warnings as errors, the release tests, and the
+   release build the user launches, and names the first step that fails. It needs no credentials.
+2. The footer hint in `src/ui.rs` lists any key you added or changed.
+3. Say what the user should press to try the change. Automated checks do not replace live-pane
    review; report which interactive paths were actually tested without exposing credentials.
 
 ## Things that are not obvious from the code
