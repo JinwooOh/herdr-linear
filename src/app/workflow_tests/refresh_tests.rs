@@ -222,6 +222,9 @@ fn a_hidden_scope_fetch_running_around_a_state_change_is_dropped_and_refreshes_w
     assert!(!hidden(&app, 1).loading());
 
     app.on_key(KeyCode::Char('t'));
+    // The due Team list waits while its Account's write runs.
+    app.poll_background();
+    assert_eq!(fetched(&app), [(false, false), (false, false)]);
     // An Assigned fetch, now hidden, is still running when the write finishes.
     let (stale_assigned, job) = Job::channel();
     app.accounts[1].hidden.as_mut().unwrap().pending = Some(job);
