@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Quality gate: lint, test, and build the release binary the user launches.
+# Stops at the first failing step and names it. Needs no credentials; ignored live tests stay ignored.
+set -uo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+if ! command -v cargo >/dev/null 2>&1 && [ -f "$HOME/.cargo/env" ]; then
+  . "$HOME/.cargo/env"
+fi
+
+run() {
+  local step="$1"
+  shift
+  echo "==> $step: $*"
+  if ! "$@"; then
+    echo "scripts/check: FAILED at step '$step'" >&2
+    exit 1
+  fi
+}
+
+run clippy cargo clippy --release --all-targets -- -D warnings
+run test cargo test --release
+run build cargo build --release
+echo "scripts/check: all steps passed"
