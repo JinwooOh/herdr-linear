@@ -120,8 +120,7 @@ automatic merge. Omitting these options (including the no-config fallback) keeps
 ## Build and run
 
 ```sh
-cargo test --release
-cargo clippy --release --all-targets
+scripts/check                  # quality gate: clippy (warnings are errors), tests, release build
 cargo build --release
 ./target/release/herdr-linear
 ```
