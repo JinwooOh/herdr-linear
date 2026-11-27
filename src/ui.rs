@@ -284,10 +284,14 @@ fn draw_loading(
 
 fn messages(app: &App) -> String {
     // Dedicated lines: transient success must never replace account failures.
+    // An Account tab shows only its own errors; the All-accounts queue shows every Account's.
+    let all = app.all_accounts_queue();
     let errors = app
         .accounts
         .iter()
-        .filter_map(|a| {
+        .enumerate()
+        .filter(|(index, _)| all || *index == app.active)
+        .filter_map(|(_, a)| {
             a.list
                 .error
                 .as_ref()
