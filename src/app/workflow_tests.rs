@@ -855,7 +855,7 @@ fn find(buffer: &ratatui::buffer::Buffer, row_text: &str, label: &str) -> (Strin
 #[test]
 fn rows_show_you_display_name_or_unassigned() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![
+    app.accounts[0].list.apply_snapshot(vec![
         assigned("mine", Some(("Jinwoo Oh", "jinwoo", true))),
         assigned("theirs", Some(("Ada Lovelace", "ada", false))),
         assigned("nobody", None),
@@ -879,7 +879,7 @@ fn rows_show_you_display_name_or_unassigned() {
 #[test]
 fn assignee_column_is_fixed_width_and_keeps_titles_on_narrow_panes() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![
+    app.accounts[0].list.apply_snapshot(vec![
         assigned("title-one", Some(("Long", "김진우김진우김진우", false))),
         assigned("title-two", Some(("Short", "ada", false))),
         assigned("title-three", None),
@@ -897,19 +897,21 @@ fn assignee_column_is_fixed_width_and_keeps_titles_on_narrow_panes() {
 #[test]
 fn detail_pane_shows_assignee_full_name_or_unassigned() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![assigned(
+    app.accounts[0].list.apply_snapshot(vec![assigned(
         "theirs",
         Some(("Ada Lovelace", "ada", false)),
     )]);
     app.poll_background();
     assert!(render(&mut app).contains("Assignee: Ada Lovelace"));
-    app.accounts[0].apply_snapshot(vec![assigned("nobody", None)]);
+    app.accounts[0]
+        .list
+        .apply_snapshot(vec![assigned("nobody", None)]);
     assert!(render(&mut app).contains("Assignee: Unassigned"));
 }
 #[test]
 fn assignee_names_are_sanitized_like_titles() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![assigned(
+    app.accounts[0].list.apply_snapshot(vec![assigned(
         "sneaky",
         Some(("Ada\u{202e}Lovelace", "\u{200b}x", false)),
     )]);
