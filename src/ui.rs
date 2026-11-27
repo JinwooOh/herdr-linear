@@ -114,10 +114,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     let [body, footer] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(5)]).areas(frame.area());
-    let [left, right] = if body.width < 80 {
+    // Side by side only while the list keeps room for All-accounts queue titles. The rule holds
+    // on every Account tab too, so pressing `a` never moves the panes. The shortest possible
+    // minimum (`[] ` + 37) already stacks anything under 80 columns.
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(body);
+    let [left, right] = if usize::from(left.width.saturating_sub(2)) < min_queue_row_width(app) {
         Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body)
     } else {
-        Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(body)
+        [left, right]
     };
     let title = account_tabs(app);
     let all = app.all_accounts_queue();
@@ -129,7 +134,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .map(|&(a, i)| {
                 let issue = &app.accounts[a].list.issues[i];
                 let prefix = Span::styled(
-                    format!("[{}] ", app.accounts[a].name),
+                    account_prefix(&app.accounts[a].name),
                     Style::new().fg(Color::Magenta),
                 );
                 ListItem::new(list_row(issue, Some(prefix), row_width))
@@ -342,6 +347,26 @@ fn account_tabs(app: &App) -> Line<'static> {
 
 /// The fewest title cells a row keeps; below this the assignee column is left out.
 const MIN_TITLE_WIDTH: usize = 16;
+/// Cells the identifier and Issue state columns are padded to.
+const IDENTIFIER_WIDTH: usize = 9;
+const STATE_WIDTH: usize = 12;
+
+/// The `[account] ` prefix that All-accounts queue rows start with.
+fn account_prefix(name: &str) -> String {
+    format!("[{name}] ")
+}
+
+/// Row cells an All-accounts queue row needs to keep `MIN_TITLE_WIDTH` title cells
+/// after the longest configured Account prefix, the identifier and the Issue state.
+fn min_queue_row_width(app: &App) -> usize {
+    let prefix = app
+        .accounts
+        .iter()
+        .map(|a| Span::raw(account_prefix(&a.name)).width())
+        .max()
+        .unwrap_or(0);
+    prefix + IDENTIFIER_WIDTH + STATE_WIDTH + MIN_TITLE_WIDTH
+}
 
 /// One issue row for a list whose rows are `width` cells wide, after an optional prefix.
 /// The detail pane always shows the assignee, so the row may drop it to keep the title readable.
@@ -349,11 +374,11 @@ fn list_row(issue: &Issue, prefix: Option<Span<'static>>, width: usize) -> Line<
     let mut spans: Vec<Span<'static>> = prefix.into_iter().collect();
     spans.extend([
         Span::styled(
-            format!("{:<9}", issue.identifier),
+            format!("{:<IDENTIFIER_WIDTH$}", issue.identifier),
             Style::new().fg(Color::Cyan),
         ),
         Span::styled(
-            format!("{:<12}", issue.state.name),
+            format!("{:<STATE_WIDTH$}", issue.state.name),
             Style::new().fg(if issue.is_in_review() {
                 Color::Yellow
             } else {
