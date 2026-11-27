@@ -296,7 +296,10 @@ impl App {
                 .pending_mutation
                 .as_ref()
                 .is_some_and(|m| m.account == index)
-                && account.list.refreshed.elapsed() >= REFRESH_INTERVAL
+                && account
+                    .list
+                    .refreshed
+                    .is_none_or(|refreshed| refreshed.elapsed() >= REFRESH_INTERVAL)
             {
                 account.refresh(self.scope);
             }
@@ -1077,20 +1080,33 @@ impl App {
         };
         let id = issue_id.clone();
         match Job::spawn(move || linear::change_state(&key, &id, &state_id)) {
-            Ok(job) => {
-                // A refresh started before this write must not overwrite the mutation result.
-                self.accounts[account].list.pending = None;
-                self.pending_mutation = Some(PendingMutation {
-                    account,
-                    issue_id,
-                    title,
-                    job,
-                });
-                self.status =
-                    Some("Updating issue state… (cannot cancel a submitted change)".into());
-            }
+            Ok(job) => self.begin_mutation(account, issue_id, title, job),
             Err(error) => self.status = Some(error),
         }
+    }
+
+    /// Tracks a submitted state change `job` for `issue_id` of Account `account`.
+    fn begin_mutation(
+        &mut self,
+        account: usize,
+        issue_id: String,
+        title: String,
+        job: Job<linear::State>,
+    ) {
+        // A refresh started before this write must not overwrite the mutation result. The
+        // hidden scope refreshes as soon as it is shown again.
+        let target = &mut self.accounts[account];
+        target.list.pending = None;
+        if let Some(hidden) = &mut target.hidden {
+            hidden.drop_fetch();
+        }
+        self.pending_mutation = Some(PendingMutation {
+            account,
+            issue_id,
+            title,
+            job,
+        });
+        self.status = Some("Updating issue state… (cannot cancel a submitted change)".into());
     }
 
     fn poll_mutation(&mut self) {
@@ -1133,8 +1149,12 @@ impl App {
                 self.status = Some(format!("{} / {}: {error}", account.name, pending.title))
             }
         }
-        // A current-scope fetch started before the write finished (by `t`) may predate it.
+        // A fetch started before the write finished (by `t`) may predate it. The current
+        // scope refreshes now; the hidden one as soon as it is shown again.
         account.list.pending = None;
+        if let Some(hidden) = &mut account.hidden {
+            hidden.drop_fetch();
+        }
         account.refresh(self.scope);
     }
 }
