@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, View},
+    app::{App, IssueScope, View},
     linear::Issue,
     review::{FileDiff, Review},
 };
@@ -160,9 +160,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             lines.extend(detail_lines(issue));
             lines
         }
-        None => vec![Line::from(
-            "No open issues assigned to you (or still loading).",
-        )],
+        None => vec![Line::from(match app.scope {
+            IssueScope::Assigned => "No open issues assigned to you (or still loading).",
+            IssueScope::Team => "No open Team issues (or still loading).",
+        })],
     };
     frame.render_widget(
         Paragraph::new(detail)
@@ -175,7 +176,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         ""
     };
-    let hint = format!("{activity}\n{messages}\nj/k move  g/G ends  tab/1-9 Account  a all\nenter PR  s state  r refresh  q/Esc quit  Ctrl+C quit");
+    let hint = format!("{activity}\n{messages}\nj/k move  g/G ends  tab/1-9 Account  a all  t scope\nenter PR  s state  r refresh  q/Esc quit  Ctrl+C quit");
     frame.render_widget(
         Paragraph::new(crate::display::safe(&hint)).style(Style::new().fg(Color::DarkGray)),
         footer,
@@ -300,7 +301,13 @@ fn messages(app: &App) -> String {
 }
 
 fn account_tabs(app: &App) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("{} ", app.scope.label()),
+            Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+    ];
     for (index, account) in app.accounts.iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw(" | "));

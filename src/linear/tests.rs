@@ -194,3 +194,46 @@ fn assigned_issues_query_requests_the_assignee() {
         );
     }
 }
+#[test]
+fn an_issue_returned_as_team_issue_and_as_assigned_appears_once() {
+    let mut team_copy = issue("both", "2026-01-01");
+    team_copy.title = "older".into();
+    let mut assigned_copy = issue("both", "2026-01-02");
+    assigned_copy.title = "newer".into();
+    let mut done = issue("done", "2026-01-03");
+    done.state.kind = "completed".into();
+    let issues = collect_pages(|_| {
+        Ok(page(
+            vec![
+                team_copy.clone(),
+                issue("other", "2026-01-01"),
+                assigned_copy.clone(),
+                done.clone(),
+            ],
+            None,
+        ))
+    })
+    .unwrap();
+    let ids: Vec<_> = issues.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(ids, ["both", "other"]);
+    assert_eq!(issues[0].title, "newer");
+}
+#[test]
+fn team_issues_query_reads_team_members_or_assignee_and_excludes_closed_states() {
+    let query: String = TEAM_QUERY.split_whitespace().collect();
+    assert!(!query.contains("viewer"), "{query}");
+    assert!(
+        query.contains("issues(first:100after:$afterorderBy:updatedAt"),
+        "{query}"
+    );
+    assert!(
+        query.contains("or:[{team:{members:{some:{isMe:{eq:true}}}}}{assignee:{isMe:{eq:true}}}]"),
+        "{query}"
+    );
+    assert!(
+        query.contains(r#"state:{type:{nin:["completed","canceled"]}}"#),
+        "{query}"
+    );
+    assert!(query.contains("assignee{idnamedisplayNameisMe}"), "{query}");
+    assert!(query.contains("pageInfo{hasNextPageendCursor}"), "{query}");
+}

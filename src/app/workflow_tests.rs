@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 
 mod merge_tests;
+mod scope_tests;
 
 fn issue(id: &str, review: bool) -> linear::Issue {
     serde_json::from_value(json!({"id":id,"identifier":"HL-1","title":id,"url":"https://linear.app/test","priority":0,"branchName":"test","updatedAt":"2026-01-01T00:00:00Z","team":{"id":"team"},"state":{"id":"s","name":if review {"In Review"} else {"Todo"},"type":"started"},"attachments":{"nodes":[]}})).unwrap()
@@ -79,7 +80,7 @@ fn account_terms_render_and_existing_navigation_is_unchanged() {
     assert!(app.all_accounts_queue());
     assert_eq!(app.selected().unwrap().0, 1);
 
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 30)).unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(70, 30)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let text: String = terminal
         .backend()

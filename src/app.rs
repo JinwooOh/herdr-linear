@@ -47,10 +47,45 @@ pub struct StatePicker {
     pub error: Option<String>,
 }
 
+/// Which open issues the app shows. One Issue scope applies to every Account tab and
+/// the All-accounts queue. It always starts as Assigned issues and is never saved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IssueScope {
+    #[default]
+    Assigned,
+    Team,
+}
+
+impl IssueScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Assigned => "Assigned",
+            Self::Team => "Team",
+        }
+    }
+
+    fn toggled(self) -> Self {
+        match self {
+            Self::Assigned => Self::Team,
+            Self::Team => Self::Assigned,
+        }
+    }
+
+    fn fetch(self) -> issue_list::Fetch {
+        match self {
+            Self::Assigned => linear::fetch_issues,
+            Self::Team => linear::fetch_team_issues,
+        }
+    }
+}
+
 pub struct Account {
     pub name: String,
     key: Result<String, String>,
+    /// The issue list of the App's current Issue scope.
     pub list: IssueList,
+    /// The other Issue scope's list, kept as it was; `None` until that scope is first shown.
+    hidden: Option<IssueList>,
 }
 
 impl Account {
@@ -59,13 +94,28 @@ impl Account {
             name: config.name,
             key: config.key,
             list: IssueList::default(),
+            hidden: None,
         };
-        account.refresh();
+        account.refresh(IssueScope::default());
         account
     }
 
-    fn refresh(&mut self) {
-        self.list.refresh(&self.key, linear::fetch_issues);
+    /// Refreshes `list`, which must be the list of `scope`.
+    fn refresh(&mut self, scope: IssueScope) {
+        self.list.refresh(&self.key, scope.fetch());
+    }
+
+    /// Makes `scope`'s list current. A scope shown for the first time starts its fetch.
+    fn show(&mut self, scope: IssueScope) {
+        let list = match self.hidden.take() {
+            Some(list) => list,
+            None => {
+                let mut list = IssueList::default();
+                list.refresh(&self.key, scope.fetch());
+                list
+            }
+        };
+        self.hidden = Some(std::mem::replace(&mut self.list, list));
     }
 }
 
@@ -116,10 +166,13 @@ pub struct App {
     pub accounts: Vec<Account>,
     /// accounts.len() selects the All-accounts queue instead of an Account tab.
     pub active: usize,
+    pub scope: IssueScope,
     pub status: Option<String>,
     pub view: View,
     pub queue: Vec<(usize, usize)>,
     pub queue_list: ListState,
+    /// The All-accounts queue selection of the Issue scope not shown.
+    hidden_queue_list: ListState,
     quit: bool,
     pending_review: Option<PendingReview>,
     // Retained even after leaving the PR view: at most one status worker can run.
@@ -140,10 +193,12 @@ impl App {
         Self {
             accounts: configs.into_iter().map(Account::new).collect(),
             active: 0,
+            scope: IssueScope::default(),
             status: None,
             view: View::Issues,
             queue: Vec::new(),
             queue_list: ListState::default(),
+            hidden_queue_list: ListState::default(),
             quit: false,
             pending_review: None,
             pending_readiness: None,
@@ -232,7 +287,7 @@ impl App {
                 .is_some_and(|m| m.account == index)
                 && account.list.refreshed.elapsed() >= REFRESH_INTERVAL
             {
-                account.refresh();
+                account.refresh(self.scope);
             }
         }
         self.poll_mutation();
@@ -363,7 +418,7 @@ impl App {
                             .as_ref()
                             .is_some_and(|m| m.account == i)
                     {
-                        account.refresh();
+                        account.refresh(self.scope);
                     }
                 }
             }
@@ -380,8 +435,19 @@ impl App {
             }
             KeyCode::Enter => self.open_review(),
             KeyCode::Char('s') => self.open_states(),
+            KeyCode::Char('t') => self.toggle_scope(),
             _ => {}
         }
+    }
+
+    fn toggle_scope(&mut self) {
+        self.scope = self.scope.toggled();
+        for account in &mut self.accounts {
+            account.show(self.scope);
+        }
+        // A hidden list does not change, so the stored queue index still names the same issue.
+        std::mem::swap(&mut self.queue_list, &mut self.hidden_queue_list);
+        self.rebuild_queue(None);
     }
 
     fn picker_key(&mut self, code: KeyCode) {
@@ -1057,6 +1123,6 @@ impl App {
                 self.status = Some(format!("{} / {}: {error}", account.name, pending.title))
             }
         }
-        account.refresh();
+        account.refresh(self.scope);
     }
 }
