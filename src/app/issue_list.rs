@@ -13,7 +13,8 @@ pub struct IssueList {
     pub selection: ListState,
     pub error: Option<String>,
     pub(super) pending: Option<Job<Vec<linear::Issue>>>,
-    pub(super) refreshed: Instant,
+    /// When this list last started or finished a fetch; `None` means a refresh is due now.
+    pub(super) refreshed: Option<Instant>,
 }
 
 impl Default for IssueList {
@@ -23,7 +24,7 @@ impl Default for IssueList {
             selection: ListState::default(),
             error: None,
             pending: None,
-            refreshed: Instant::now(),
+            refreshed: Some(Instant::now()),
         }
     }
 }
@@ -34,7 +35,7 @@ impl IssueList {
         if self.pending.is_some() {
             return;
         }
-        self.refreshed = Instant::now();
+        self.refreshed = Some(Instant::now());
         let key = match key {
             Ok(key) => key.clone(),
             Err(error) => {
@@ -53,7 +54,7 @@ impl IssueList {
         let Some(job) = &self.pending else { return };
         if let Some(result) = job.poll() {
             self.pending = None;
-            self.refreshed = Instant::now();
+            self.refreshed = Some(Instant::now());
             match result {
                 Ok(issues) => {
                     self.apply_snapshot(issues);
@@ -62,6 +63,12 @@ impl IssueList {
                 Err(error) => self.error = Some(error),
             }
         }
+    }
+
+    /// Drops the running fetch, whose result may predate a write, and makes a refresh due.
+    pub(super) fn drop_fetch(&mut self) {
+        self.pending = None;
+        self.refreshed = None;
     }
 
     pub(super) fn apply_snapshot(&mut self, mut issues: Vec<linear::Issue>) {

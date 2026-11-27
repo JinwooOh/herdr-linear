@@ -40,8 +40,8 @@ fn polling_refreshes_only_each_accounts_current_scope() {
     let mut app = team_app();
     let due = Instant::now() - REFRESH_INTERVAL;
     for account in &mut app.accounts {
-        account.list.refreshed = due;
-        account.hidden.as_mut().unwrap().refreshed = due;
+        account.list.refreshed = Some(due);
+        account.hidden.as_mut().unwrap().refreshed = Some(due);
     }
     app.poll_background();
     assert_eq!(fetched(&app), [(true, false), (true, false)]);
@@ -198,5 +198,53 @@ fn a_state_change_finishing_after_t_routes_to_its_account_and_refreshes_the_curr
     assert_eq!(ids(&app.accounts[0].list), ["same"]);
     assert_eq!(ids(hidden(&app, 0)), ["other", "same"]);
     // Only the mutated Account refreshes, and only its current scope.
+    assert_eq!(fetched(&app), [(false, false), (true, false)]);
+}
+
+#[test]
+fn a_hidden_scope_fetch_running_around_a_state_change_is_dropped_and_refreshes_when_shown() {
+    let mut app = app();
+    // Show Team issues once so each Account keeps a hidden Team list, then go back.
+    app.on_key(KeyCode::Char('t'));
+    app.on_key(KeyCode::Char('t'));
+    for account in &mut app.accounts {
+        for list in std::iter::once(&mut account.list).chain(account.hidden.as_mut()) {
+            list.apply_snapshot(vec![issue("same", false), issue("other", false)]);
+            list.error = None;
+        }
+    }
+    // A Team fetch started before the write; it returns the old state.
+    let (stale_team, job) = Job::channel();
+    app.accounts[1].hidden.as_mut().unwrap().pending = Some(job);
+
+    let (write, job) = Job::channel();
+    app.begin_mutation(1, "same".into(), "HL-1".into(), job);
+    assert!(!hidden(&app, 1).loading());
+
+    app.on_key(KeyCode::Char('t'));
+    // The due Team list waits while its Account's write runs.
+    app.poll_background();
+    assert_eq!(fetched(&app), [(false, false), (false, false)]);
+    // An Assigned fetch, now hidden, is still running when the write finishes.
+    let (stale_assigned, job) = Job::channel();
+    app.accounts[1].hidden.as_mut().unwrap().pending = Some(job);
+    write.send(Ok(done())).unwrap();
+    app.poll_background();
+    let old = || vec![issue("same", false), issue("other", false)];
+    let _ = stale_team.send(Ok(old()));
+    let _ = stale_assigned.send(Ok(old()));
+    app.poll_background();
+
+    assert!(!hidden(&app, 1).loading());
+    assert_eq!(ids(&app.accounts[1].list), ["other"]);
+    assert_eq!(ids(hidden(&app, 1)), ["other"]);
+
+    // Showing Assigned issues again refreshes the mutated Account's list right away.
+    for account in &mut app.accounts {
+        account.list.error = None;
+        account.hidden.as_mut().unwrap().error = None;
+    }
+    app.on_key(KeyCode::Char('t'));
+    app.poll_background();
     assert_eq!(fetched(&app), [(false, false), (true, false)]);
 }
