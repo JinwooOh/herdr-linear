@@ -121,20 +121,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
     let title = account_tabs(app);
     let all = app.all_accounts_queue();
+    // Inside the list's two borders; the list sets no highlight symbol, so rows get the rest.
+    let row_width = usize::from(left.width.saturating_sub(2));
     let items: Vec<ListItem> = if all {
         app.queue
             .iter()
             .map(|&(a, i)| {
                 let issue = &app.accounts[a].list.issues[i];
-                let mut row = list_row(issue);
-                row.spans.insert(
-                    0,
-                    Span::styled(
-                        format!("[{}] ", app.accounts[a].name),
-                        Style::new().fg(Color::Magenta),
-                    ),
+                let prefix = Span::styled(
+                    format!("[{}] ", app.accounts[a].name),
+                    Style::new().fg(Color::Magenta),
                 );
-                ListItem::new(row)
+                ListItem::new(list_row(issue, Some(prefix), row_width))
             })
             .collect()
     } else {
@@ -142,7 +140,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .list
             .issues
             .iter()
-            .map(|i| ListItem::new(list_row(i)))
+            .map(|i| ListItem::new(list_row(i, None, row_width)))
             .collect()
     };
     let list = List::new(items)
@@ -335,8 +333,14 @@ fn account_tabs(app: &App) -> Line<'static> {
     Line::from(spans)
 }
 
-fn list_row(issue: &Issue) -> Line<'static> {
-    Line::from(vec![
+/// The fewest title cells a row keeps; below this the assignee column is left out.
+const MIN_TITLE_WIDTH: usize = 16;
+
+/// One issue row for a list whose rows are `width` cells wide, after an optional prefix.
+/// The detail pane always shows the assignee, so the row may drop it to keep the title readable.
+fn list_row(issue: &Issue, prefix: Option<Span<'static>>, width: usize) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = prefix.into_iter().collect();
+    spans.extend([
         Span::styled(
             format!("{:<9}", issue.identifier),
             Style::new().fg(Color::Cyan),
@@ -349,8 +353,50 @@ fn list_row(issue: &Issue) -> Line<'static> {
                 Color::Gray
             }),
         ),
-        Span::raw(crate::display::safe(&issue.title)),
-    ])
+    ]);
+    let used: usize = spans.iter().map(Span::width).sum();
+    let assignee = assignee_cell(issue);
+    if width.saturating_sub(used + assignee.width()) >= MIN_TITLE_WIDTH {
+        spans.push(assignee);
+    }
+    spans.push(Span::raw(crate::display::safe(&issue.title)));
+    Line::from(spans)
+}
+
+/// Display columns the row's assignee label may use, before its trailing space.
+const ASSIGNEE_WIDTH: usize = "Unassigned".len();
+
+/// `you` highlighted, the display name plain, or `Unassigned` dimmed, padded to a fixed width.
+fn assignee_cell(issue: &Issue) -> Span<'static> {
+    let (label, style) = match &issue.assignee {
+        Some(a) if a.is_me => (
+            "you".to_string(),
+            Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ),
+        Some(a) => (crate::display::safe(&a.display_name), Style::new()),
+        None => ("Unassigned".to_string(), Style::new().fg(Color::DarkGray)),
+    };
+    Span::styled(format!("{} ", fit(&label, ASSIGNEE_WIDTH)), style)
+}
+
+/// Pad or truncate `text` to exactly `width` display columns, ending cut text with `…`.
+fn fit(text: &str, width: usize) -> String {
+    let columns = |s: &str| Span::raw(s).width();
+    if columns(text) <= width {
+        return format!("{text}{}", " ".repeat(width - columns(text)));
+    }
+    let mut out = String::new();
+    for c in text.chars() {
+        let mut next = out.clone();
+        next.push(c);
+        if columns(&next) + 1 > width {
+            break;
+        }
+        out = next;
+    }
+    out.push('…');
+    let used = columns(&out);
+    out + &" ".repeat(width - used)
 }
 
 fn detail_lines(issue: &Issue) -> Vec<Line<'static>> {
@@ -362,6 +408,13 @@ fn detail_lines(issue: &Issue) -> Vec<Line<'static>> {
         )),
         Line::from(""),
         Line::from(format!("State:    {}", issue.state.name)),
+        Line::from(format!(
+            "Assignee: {}",
+            issue
+                .assignee
+                .as_ref()
+                .map_or("Unassigned".to_string(), |a| crate::display::safe(&a.name))
+        )),
         Line::from(format!("Priority: {}", issue.priority_label())),
         Line::from(format!("Branch:   {}", issue.branch_name)),
         Line::from(format!("Linear:   {}", issue.url)),
@@ -609,5 +662,51 @@ mod tests {
         assert_eq!(pixel_bar(0, Duration::ZERO), "");
         assert_eq!(pixel_bar(1, Duration::from_secs(9)), "█");
         assert_eq!(pixel_bar(3, Duration::from_secs(9)).chars().count(), 3);
+    }
+
+    #[test]
+    fn fit_pads_or_truncates_to_exact_display_columns() {
+        let columns = |s: &str| Span::raw(s).width();
+        assert_eq!(fit("ada", 10), "ada       ");
+        assert_eq!(fit("abcdefghij", 10), "abcdefghij");
+        assert_eq!(fit("abcdefghijk", 10), "abcdefghi…");
+        assert_eq!(fit("김진우김진", 10), "김진우김진");
+        // A wide character that would cross the boundary is dropped, then padded.
+        assert_eq!(fit("김진우김진우", 10), "김진우김… ");
+        assert_eq!(fit("a김진우김진", 10), "a김진우김…");
+        for name in [
+            "",
+            "x",
+            "김진우김진우김진우",
+            "a김진우김진우",
+            "e\u{301}e\u{301}e\u{301}",
+        ] {
+            assert_eq!(columns(&fit(name, 10)), 10, "{name:?}");
+        }
+    }
+
+    fn unassigned_issue(identifier: &str) -> Issue {
+        serde_json::from_value(serde_json::json!({"id":"i","identifier":identifier,"title":"t","url":"https://linear.app/test","priority":0,"branchName":"b","updatedAt":"2026-01-01T00:00:00Z","team":{"id":"team"},"state":{"id":"s","name":"Todo","type":"started"},"attachments":{"nodes":[]}})).unwrap()
+    }
+
+    fn shows_assignee(issue: &Issue, prefix: Option<&str>, width: usize) -> bool {
+        let prefix = prefix.map(|p| Span::raw(p.to_string()));
+        let row = list_row(issue, prefix, width);
+        row.spans.iter().any(|s| s.content.contains("Unassigned"))
+    }
+
+    #[test]
+    fn assignee_column_shows_only_when_the_title_keeps_min_title_width() {
+        // Identifier 9 + state 12 + assignee 11 leaves the title exactly 16 at width 48.
+        let short = unassigned_issue("HL-1");
+        assert!(shows_assignee(&short, None, 32 + MIN_TITLE_WIDTH));
+        assert!(!shows_assignee(&short, None, 32 + MIN_TITLE_WIDTH - 1));
+        // The prefix counts against the row.
+        assert!(shows_assignee(&short, Some("[work] "), 39 + MIN_TITLE_WIDTH));
+        assert!(!shows_assignee(&short, Some("[work] "), 38 + MIN_TITLE_WIDTH));
+        // An identifier longer than its 9-cell pad is measured, not assumed.
+        let long = unassigned_issue("LONGTEAM-12345");
+        assert!(shows_assignee(&long, None, 37 + MIN_TITLE_WIDTH));
+        assert!(!shows_assignee(&long, None, 36 + MIN_TITLE_WIDTH));
     }
 }
