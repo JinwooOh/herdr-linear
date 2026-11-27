@@ -684,4 +684,29 @@ mod tests {
             assert_eq!(columns(&fit(name, 10)), 10, "{name:?}");
         }
     }
+
+    fn unassigned_issue(identifier: &str) -> Issue {
+        serde_json::from_value(serde_json::json!({"id":"i","identifier":identifier,"title":"t","url":"https://linear.app/test","priority":0,"branchName":"b","updatedAt":"2026-01-01T00:00:00Z","team":{"id":"team"},"state":{"id":"s","name":"Todo","type":"started"},"attachments":{"nodes":[]}})).unwrap()
+    }
+
+    fn shows_assignee(issue: &Issue, prefix: Option<&str>, width: usize) -> bool {
+        let prefix = prefix.map(|p| Span::raw(p.to_string()));
+        let row = list_row(issue, prefix, width);
+        row.spans.iter().any(|s| s.content.contains("Unassigned"))
+    }
+
+    #[test]
+    fn assignee_column_shows_only_when_the_title_keeps_min_title_width() {
+        // Identifier 9 + state 12 + assignee 11 leaves the title exactly 16 at width 48.
+        let short = unassigned_issue("HL-1");
+        assert!(shows_assignee(&short, None, 32 + MIN_TITLE_WIDTH));
+        assert!(!shows_assignee(&short, None, 32 + MIN_TITLE_WIDTH - 1));
+        // The prefix counts against the row.
+        assert!(shows_assignee(&short, Some("[work] "), 39 + MIN_TITLE_WIDTH));
+        assert!(!shows_assignee(&short, Some("[work] "), 38 + MIN_TITLE_WIDTH));
+        // An identifier longer than its 9-cell pad is measured, not assumed.
+        let long = unassigned_issue("LONGTEAM-12345");
+        assert!(shows_assignee(&long, None, 37 + MIN_TITLE_WIDTH));
+        assert!(!shows_assignee(&long, None, 36 + MIN_TITLE_WIDTH));
+    }
 }
