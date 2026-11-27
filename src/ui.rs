@@ -125,7 +125,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.queue
             .iter()
             .map(|&(a, i)| {
-                let issue = &app.accounts[a].issues[i];
+                let issue = &app.accounts[a].list.issues[i];
                 let mut row = list_row(issue);
                 row.spans.insert(
                     0,
@@ -139,6 +139,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .collect()
     } else {
         app.accounts[app.active]
+            .list
             .issues
             .iter()
             .map(|i| ListItem::new(list_row(i)))
@@ -150,7 +151,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if all {
         frame.render_stateful_widget(list, left, &mut app.queue_list);
     } else {
-        frame.render_stateful_widget(list, left, &mut app.accounts[app.active].list);
+        frame.render_stateful_widget(list, left, &mut app.accounts[app.active].list.selection);
     }
     let detail = match app.selected() {
         Some((account, issue)) => {
@@ -171,7 +172,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .wrap(Wrap { trim: false }),
         right,
     );
-    let activity = if app.accounts.iter().any(|a| a.loading()) {
+    let activity = if app.accounts.iter().any(|a| a.list.loading()) {
         "refreshing…"
     } else {
         ""
@@ -283,7 +284,8 @@ fn messages(app: &App) -> String {
         .accounts
         .iter()
         .filter_map(|a| {
-            a.error
+            a.list
+                .error
                 .as_ref()
                 .map(|e| format!("{}: {}", a.name, e.lines().next().unwrap_or(e)))
         })
@@ -305,14 +307,14 @@ fn account_tabs(app: &App) -> Line<'static> {
         if index > 0 {
             spans.push(Span::raw(" | "));
         }
-        let marker = if account.error.is_some() {
+        let marker = if account.list.error.is_some() {
             " !"
-        } else if account.loading() {
+        } else if account.list.loading() {
             " …"
         } else {
             ""
         };
-        let label = format!("{} ({}){}", account.name, account.issues.len(), marker);
+        let label = format!("{} ({}){}", account.name, account.list.issues.len(), marker);
         let style = if index == app.active {
             Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
