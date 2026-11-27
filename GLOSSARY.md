@@ -1,6 +1,6 @@
 # herdr-linear
 
-A terminal pane inside Herdr for working through assigned Linear issues and reading their linked GitHub PRs without leaving the terminal.
+A terminal pane inside Herdr for working through Linear issues and reading their linked GitHub PRs without leaving the terminal.
 
 ## Language
 
@@ -16,9 +16,25 @@ _Avoid_: Workspace (unqualified), Account
 A Linear workflow state of an issue (for example In Review, Done). Each Linear team defines its own set.
 _Avoid_: State (unqualified), status
 
+**Open issue**:
+An issue whose Issue state is not of the completed, canceled, or duplicate kind. Backlog and triage issues are open.
+_Avoid_: Active issue, incomplete issue
+
 **Account tab**:
-The view of one Account's open issues.
+The view of one Account's open issues in the current Issue scope.
 _Avoid_: Workspace tab
+
+**Issue scope**:
+Which open issues the app shows: Assigned issues or Team issues. One Issue scope applies to every Account tab and the All-accounts queue.
+_Avoid_: Filter, mode, view
+
+**Assigned issues**:
+An Account's open issues that are assigned to its user. The default Issue scope.
+_Avoid_: My issues, mine
+
+**Team issues**:
+The open issues of every Linear team the Account's user belongs to, whoever is assigned, plus the Account's Assigned issues from any other team.
+_Avoid_: All issues, all tasks
 
 **All-accounts queue**:
 The merged list of open issues from every Account, shown alongside the Account tabs. Each entry keeps its Account of origin.
