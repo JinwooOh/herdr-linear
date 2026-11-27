@@ -30,23 +30,28 @@ fn wait(app: &mut App, done: impl Fn(&App) -> bool) {
 fn snapshot_preserves_selection_and_removes_absent_issues() {
     let mut app = app();
     let a = &mut app.accounts[0];
-    a.apply_snapshot(vec![issue("a", false), issue("b", false)]);
-    a.list.select(Some(1));
+    a.list
+        .apply_snapshot(vec![issue("a", false), issue("b", false)]);
+    a.list.selection.select(Some(1));
     let mut b = issue("b", true);
     b.updated_at = "2026-01-02T00:00:00Z".into();
-    a.apply_snapshot(vec![issue("a", false), b]);
-    assert_eq!(a.selected().unwrap().id, "b");
-    assert_eq!(a.list.selected(), Some(0));
-    a.apply_snapshot(vec![issue("a", false)]);
-    assert_eq!(a.selected().unwrap().id, "a");
-    a.apply_snapshot(vec![]);
-    assert!(a.selected().is_none());
+    a.list.apply_snapshot(vec![issue("a", false), b]);
+    assert_eq!(a.list.selected().unwrap().id, "b");
+    assert_eq!(a.list.selection.selected(), Some(0));
+    a.list.apply_snapshot(vec![issue("a", false)]);
+    assert_eq!(a.list.selected().unwrap().id, "a");
+    a.list.apply_snapshot(vec![]);
+    assert!(a.list.selected().is_none());
 }
 #[test]
 fn all_accounts_queue_keeps_account_identity_and_review_order() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![issue("same", false)]);
-    app.accounts[1].apply_snapshot(vec![issue("same", true)]);
+    app.accounts[0]
+        .list
+        .apply_snapshot(vec![issue("same", false)]);
+    app.accounts[1]
+        .list
+        .apply_snapshot(vec![issue("same", true)]);
     app.poll_background();
     app.on_key(KeyCode::Char('a'));
     assert_eq!(app.queue.len(), 2);
@@ -60,8 +65,12 @@ fn all_accounts_queue_keeps_account_identity_and_review_order() {
 #[test]
 fn account_terms_render_and_existing_navigation_is_unchanged() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![issue("work-issue", false)]);
-    app.accounts[1].apply_snapshot(vec![issue("personal-issue", true)]);
+    app.accounts[0]
+        .list
+        .apply_snapshot(vec![issue("work-issue", false)]);
+    app.accounts[1]
+        .list
+        .apply_snapshot(vec![issue("personal-issue", true)]);
     app.poll_background();
     assert!(!app.all_accounts_queue());
     app.on_key(KeyCode::Tab);
@@ -106,7 +115,7 @@ fn multiple_prs_show_picker_and_cancel_does_not_load() {
             source_type: None,
         });
     }
-    app.accounts[0].apply_snapshot(vec![i]);
+    app.accounts[0].list.apply_snapshot(vec![i]);
     app.on_key(KeyCode::Enter);
     let View::PrPicker(p) = &app.view else {
         panic!("expected PR picker")
@@ -124,18 +133,18 @@ fn multiple_prs_show_picker_and_cancel_does_not_load() {
 #[test]
 fn one_account_failure_does_not_erase_another_or_stale_data() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![issue("a", false)]);
-    app.accounts[0].pending = Some(Job::spawn(|| anyhow::bail!("offline")).unwrap());
-    wait(&mut app, |a| !a.accounts[0].loading());
-    assert_eq!(app.accounts[0].issues.len(), 1);
-    assert_eq!(app.accounts[0].error.as_deref(), Some("offline"));
+    app.accounts[0].list.apply_snapshot(vec![issue("a", false)]);
+    app.accounts[0].list.pending = Some(Job::spawn(|| anyhow::bail!("offline")).unwrap());
+    wait(&mut app, |a| !a.accounts[0].list.loading());
+    assert_eq!(app.accounts[0].list.issues.len(), 1);
+    assert_eq!(app.accounts[0].list.error.as_deref(), Some("offline"));
     assert_eq!(app.queue.len(), 1);
 }
 #[test]
 fn refresh_is_nonblocking_and_does_not_replace_an_active_request() {
     let mut app = app();
     let (release, waiter) = mpsc::channel();
-    app.accounts[0].pending = Some(
+    app.accounts[0].list.pending = Some(
         Job::spawn(move || {
             waiter.recv()?;
             Ok(vec![issue("a", false)])
@@ -146,16 +155,20 @@ fn refresh_is_nonblocking_and_does_not_replace_an_active_request() {
     app.on_key(KeyCode::Tab);
     assert_eq!(app.active, 1);
     app.poll_background();
-    assert!(app.accounts[0].loading());
+    assert!(app.accounts[0].list.loading());
     release.send(()).unwrap();
-    wait(&mut app, |a| !a.accounts[0].loading());
-    assert_eq!(app.accounts[0].issues.len(), 1);
+    wait(&mut app, |a| !a.accounts[0].list.loading());
+    assert_eq!(app.accounts[0].list.issues.len(), 1);
 }
 #[test]
 fn mutation_result_routes_to_captured_account_even_after_switching() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![issue("same", false)]);
-    app.accounts[1].apply_snapshot(vec![issue("same", false)]);
+    app.accounts[0]
+        .list
+        .apply_snapshot(vec![issue("same", false)]);
+    app.accounts[1]
+        .list
+        .apply_snapshot(vec![issue("same", false)]);
     app.pending_mutation = Some(PendingMutation {
         account: 1,
         issue_id: "same".into(),
@@ -171,14 +184,14 @@ fn mutation_result_routes_to_captured_account_even_after_switching() {
         .unwrap(),
     });
     wait(&mut app, |a| a.pending_mutation.is_none());
-    assert_eq!(app.accounts[0].issues.len(), 1);
-    assert!(app.accounts[1].issues.is_empty());
+    assert_eq!(app.accounts[0].list.issues.len(), 1);
+    assert!(app.accounts[1].list.issues.is_empty());
     assert!(app.status.as_ref().unwrap().contains("personal"));
 }
 #[test]
 fn mutation_error_keeps_original_state() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![issue("a", false)]);
+    app.accounts[0].list.apply_snapshot(vec![issue("a", false)]);
     app.pending_mutation = Some(PendingMutation {
         account: 0,
         issue_id: "a".into(),
@@ -186,7 +199,7 @@ fn mutation_error_keeps_original_state() {
         job: Job::spawn(|| anyhow::bail!("denied")).unwrap(),
     });
     wait(&mut app, |a| a.pending_mutation.is_none());
-    assert_eq!(app.accounts[0].issues[0].state.name, "Todo");
+    assert_eq!(app.accounts[0].list.issues[0].state.name, "Todo");
     assert!(app.status.as_ref().unwrap().contains("denied"));
 }
 #[test]
@@ -216,7 +229,9 @@ fn state_picker_cancel_never_submits_mutation() {
 #[test]
 fn tiny_unicode_review_and_all_queue_render_without_panicking() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![issue("안녕", false)]);
+    app.accounts[0]
+        .list
+        .apply_snapshot(vec![issue("안녕", false)]);
     app.poll_background();
     for (width, height) in [(1, 1), (8, 3), (40, 10)] {
         let mut terminal =
@@ -309,7 +324,7 @@ fn terminal_states_require_confirmation_and_cancel_writes_nothing() {
 #[test]
 fn transient_status_clears_and_account_errors_stay_visible() {
     let mut app = app();
-    app.accounts[0].error = Some("work: HTTP 401\nsecond line".into());
+    app.accounts[0].list.error = Some("work: HTTP 401\nsecond line".into());
     app.status = Some("HL-1 has no linked pull request".into());
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 20)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
@@ -369,7 +384,7 @@ fn pr_view_footer_shows_status_and_bindings_at_sixty_columns() {
 #[test]
 fn unknown_mutation_outcome_is_not_reported_as_failure() {
     let mut app = app();
-    app.accounts[0].apply_snapshot(vec![issue("a", false)]);
+    app.accounts[0].list.apply_snapshot(vec![issue("a", false)]);
     let (sender, job) = Job::channel();
     app.pending_mutation = Some(PendingMutation {
         account: 0,
