@@ -115,12 +115,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let [body, footer] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(5)]).areas(frame.area());
     // Side by side only while the list keeps room for All-accounts queue titles. The rule holds
-    // on every Account tab too, so pressing `a` never moves the panes.
+    // on every Account tab too, so pressing `a` never moves the panes. The shortest possible
+    // minimum (`[] ` + 37) already stacks anything under 80 columns.
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(body);
-    let [left, right] = if body.width < 80
-        || usize::from(left.width.saturating_sub(2)) < min_queue_row_width(app)
-    {
+    let [left, right] = if usize::from(left.width.saturating_sub(2)) < min_queue_row_width(app) {
         Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(body)
     } else {
         [left, right]

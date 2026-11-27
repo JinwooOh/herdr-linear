@@ -266,3 +266,17 @@ fn the_cutoff_follows_the_longest_account_name_on_every_account_tab() {
         assert!(side_by_side(&screen(&mut app, 115, 30)), "tab {active} at 115");
     }
 }
+
+#[test]
+fn panes_stack_under_80_columns_even_with_a_one_letter_account() {
+    let mut app = App::new(
+        [AccountConfig {
+            name: "x".into(),
+            key: Err("test account".into()),
+        }]
+        .into(),
+    );
+    for width in [60, 79] {
+        assert!(!side_by_side(&screen(&mut app, width, 30)), "at {width}");
+    }
+}
