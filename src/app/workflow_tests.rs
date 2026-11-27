@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 
 mod merge_tests;
+mod refresh_tests;
 mod scope_tests;
 
 fn issue(id: &str, review: bool) -> linear::Issue {
