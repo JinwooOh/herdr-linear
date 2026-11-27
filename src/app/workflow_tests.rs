@@ -878,7 +878,6 @@ fn assignee_column_is_fixed_width_and_keeps_titles_on_narrow_panes() {
     assert_eq!(x_one, x_two);
     assert_eq!(x_one, x_three);
     assert!(one.contains('…'), "long names are truncated: {one}");
-    assert!(!one.contains("김진우김진우김진우"), "{one}");
 }
 #[test]
 fn detail_pane_shows_assignee_full_name_or_unassigned() {

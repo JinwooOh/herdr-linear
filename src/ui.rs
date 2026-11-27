@@ -652,4 +652,25 @@ mod tests {
         assert_eq!(pixel_bar(1, Duration::from_secs(9)), "█");
         assert_eq!(pixel_bar(3, Duration::from_secs(9)).chars().count(), 3);
     }
+
+    #[test]
+    fn fit_pads_or_truncates_to_exact_display_columns() {
+        let columns = |s: &str| Span::raw(s).width();
+        assert_eq!(fit("ada", 10), "ada       ");
+        assert_eq!(fit("abcdefghij", 10), "abcdefghij");
+        assert_eq!(fit("abcdefghijk", 10), "abcdefghi…");
+        assert_eq!(fit("김진우김진", 10), "김진우김진");
+        // A wide character that would cross the boundary is dropped, then padded.
+        assert_eq!(fit("김진우김진우", 10), "김진우김… ");
+        assert_eq!(fit("a김진우김진", 10), "a김진우김…");
+        for name in [
+            "",
+            "x",
+            "김진우김진우김진우",
+            "a김진우김진우",
+            "e\u{301}e\u{301}e\u{301}",
+        ] {
+            assert_eq!(columns(&fit(name, 10)), 10, "{name:?}");
+        }
+    }
 }
