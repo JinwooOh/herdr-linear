@@ -121,20 +121,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
     let title = account_tabs(app);
     let all = app.all_accounts_queue();
+    // Inside the list's two borders; the list sets no highlight symbol, so rows get the rest.
+    let row_width = usize::from(left.width.saturating_sub(2));
     let items: Vec<ListItem> = if all {
         app.queue
             .iter()
             .map(|&(a, i)| {
                 let issue = &app.accounts[a].list.issues[i];
-                let mut row = list_row(issue);
-                row.spans.insert(
-                    0,
-                    Span::styled(
-                        format!("[{}] ", app.accounts[a].name),
-                        Style::new().fg(Color::Magenta),
-                    ),
+                let prefix = Span::styled(
+                    format!("[{}] ", app.accounts[a].name),
+                    Style::new().fg(Color::Magenta),
                 );
-                ListItem::new(row)
+                ListItem::new(list_row(issue, Some(prefix), row_width))
             })
             .collect()
     } else {
@@ -142,7 +140,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .list
             .issues
             .iter()
-            .map(|i| ListItem::new(list_row(i)))
+            .map(|i| ListItem::new(list_row(i, None, row_width)))
             .collect()
     };
     let list = List::new(items)
@@ -335,8 +333,14 @@ fn account_tabs(app: &App) -> Line<'static> {
     Line::from(spans)
 }
 
-fn list_row(issue: &Issue) -> Line<'static> {
-    Line::from(vec![
+/// The fewest title cells a row keeps; below this the assignee column is left out.
+const MIN_TITLE_WIDTH: usize = 16;
+
+/// One issue row for a list whose rows are `width` cells wide, after an optional prefix.
+/// The detail pane always shows the assignee, so the row may drop it to keep the title readable.
+fn list_row(issue: &Issue, prefix: Option<Span<'static>>, width: usize) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = prefix.into_iter().collect();
+    spans.extend([
         Span::styled(
             format!("{:<9}", issue.identifier),
             Style::new().fg(Color::Cyan),
@@ -349,9 +353,14 @@ fn list_row(issue: &Issue) -> Line<'static> {
                 Color::Gray
             }),
         ),
-        assignee_cell(issue),
-        Span::raw(crate::display::safe(&issue.title)),
-    ])
+    ]);
+    let used: usize = spans.iter().map(Span::width).sum();
+    let assignee = assignee_cell(issue);
+    if width.saturating_sub(used + assignee.width()) >= MIN_TITLE_WIDTH {
+        spans.push(assignee);
+    }
+    spans.push(Span::raw(crate::display::safe(&issue.title)));
+    Line::from(spans)
 }
 
 /// Display columns the row's assignee label may use, before its trailing space.

@@ -861,7 +861,7 @@ fn rows_show_you_display_name_or_unassigned() {
         assigned("nobody", None),
     ]);
     app.poll_background();
-    let screen = buffer(&mut app, 120, 30);
+    let screen = buffer(&mut app, 160, 30);
 
     let (line, x, y) = find(&screen, "mine", "you ");
     assert!(!line.contains("jinwoo"), "{line}");
@@ -894,6 +894,67 @@ fn assignee_column_is_fixed_width_and_keeps_titles_on_narrow_panes() {
     assert_eq!(x_one, x_three);
     assert!(one.contains('…'), "long names are truncated: {one}");
 }
+/// Text of each row inside the list pane only, which spans `0..width` columns.
+fn list_pane_rows(buffer: &ratatui::buffer::Buffer, width: u16) -> Vec<String> {
+    (0..buffer.area.height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+#[test]
+fn assignee_column_hides_when_it_would_crowd_out_titles() {
+    let mut app = app();
+    app.accounts[0].list.apply_snapshot(vec![
+        assigned("fix-login-redirect", Some(("Jinwoo Oh", "jinwoo", true))),
+        assigned("add-billing-export", Some(("Ada Lovelace", "ada", false))),
+        assigned("drop-legacy-flags", None),
+    ]);
+    app.poll_background();
+    // 80 columns puts the list in the left 45%: 36 cells including borders. Without the
+    // assignee column an Account tab row leaves the title 13 cells; the All-accounts queue's
+    // `[work] ` prefix leaves it 6, the same as before the assignee column existed.
+    for (all, titles) in [
+        (false, ["fix-login-", "add-billin", "drop-legac"]),
+        (true, ["fix-lo", "add-bi", "drop-l"]),
+    ] {
+        if all {
+            app.on_key(KeyCode::Char('a'));
+        }
+        let screen = buffer(&mut app, 80, 24);
+        let rows = list_pane_rows(&screen, 36);
+        for title in titles {
+            let row = rows
+                .iter()
+                .find(|r| r.contains(title))
+                .unwrap_or_else(|| panic!("{title} missing (queue: {all}): {rows:#?}"));
+            for label in ["you", "jinwoo", "ada", "Unassigned", "Unassi"] {
+                assert!(!row.contains(label), "{label} in {row} (queue: {all})");
+            }
+        }
+    }
+    // The detail pane keeps the assignee.
+    assert!(render(&mut app).contains("Assignee: "));
+}
+#[test]
+fn assignee_column_shows_in_the_all_accounts_queue_on_wide_panes() {
+    let mut app = app();
+    app.accounts[0].list.apply_snapshot(vec![
+        assigned("mine", Some(("Jinwoo Oh", "jinwoo", true))),
+        assigned("theirs", Some(("Ada Lovelace", "ada", false))),
+        assigned("nobody", None),
+    ]);
+    app.poll_background();
+    app.on_key(KeyCode::Char('a'));
+    let screen = buffer(&mut app, 160, 30);
+    let rows = list_pane_rows(&screen, 72);
+    for (title, label) in [
+        ("mine", "you "),
+        ("theirs", "ada "),
+        ("nobody", "Unassigned"),
+    ] {
+        let row = rows.iter().find(|r| r.contains(title)).unwrap();
+        assert!(row.contains(label), "{label} not in {row}");
+    }
+}
 #[test]
 fn detail_pane_shows_assignee_full_name_or_unassigned() {
     let mut app = app();
@@ -916,7 +977,9 @@ fn assignee_names_are_sanitized_like_titles() {
         Some(("Ada\u{202e}Lovelace", "\u{200b}x", false)),
     )]);
     app.poll_background();
-    let text = render(&mut app);
+    // Wide enough that the row keeps its assignee column.
+    let screen = buffer(&mut app, 160, 30);
+    let text: String = screen.content.iter().map(|c| c.symbol()).collect();
     assert!(text.contains("<U+200B>x"), "row name: {text}");
     assert!(
         text.contains("Assignee: Ada<U+202E>Lovelace"),
