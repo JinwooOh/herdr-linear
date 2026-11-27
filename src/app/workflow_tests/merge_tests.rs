@@ -22,7 +22,9 @@ fn ready_app() -> App {
         .unwrap();
     app.poll_readiness_with(|_| panic!("status is fresh"));
     app.merge_options.enable_merge = true;
-    app.accounts[0].apply_snapshot(vec![issue("unchanged", true)]);
+    app.accounts[0]
+        .list
+        .apply_snapshot(vec![issue("unchanged", true)]);
     app
 }
 
@@ -214,7 +216,7 @@ fn confirmation_displays_identity_and_only_y_submits_cancel_preserves_diff() {
         assert_eq!(review.files.len(), 2);
         assert!(render(&mut app).contains("+new"));
         assert!(app.pending_mutation.is_none());
-        assert_eq!(app.accounts[0].issues[0].state.name, "In Review");
+        assert_eq!(app.accounts[0].list.issues[0].state.name, "In Review");
     }
 }
 
@@ -264,7 +266,7 @@ fn explicit_confirmation_queues_pinned_background_merge_and_success_stays_in_pr_
     assert!(!review.can_merge());
     app.poll_readiness_with(|_| panic!("must not refresh a known merged PR"));
     assert!(app.pending_mutation.is_none());
-    assert_eq!(app.accounts[0].issues[0].state.name, "In Review");
+    assert_eq!(app.accounts[0].list.issues[0].state.name, "In Review");
     app.on_key(KeyCode::Esc);
     assert!(matches!(app.view, View::Issues));
     assert!(!app.quit);

@@ -50,11 +50,7 @@ pub struct StatePicker {
 pub struct Account {
     pub name: String,
     key: Result<String, String>,
-    pub issues: Vec<linear::Issue>,
-    pub list: ListState,
-    pub error: Option<String>,
-    pending: Option<Job<Vec<linear::Issue>>>,
-    refreshed: Instant,
+    pub list: IssueList,
 }
 
 impl Account {
@@ -62,88 +58,19 @@ impl Account {
         let mut account = Self {
             name: config.name,
             key: config.key,
-            issues: Vec::new(),
-            list: ListState::default(),
-            error: None,
-            pending: None,
-            refreshed: Instant::now(),
+            list: IssueList::default(),
         };
         account.refresh();
         account
     }
 
     fn refresh(&mut self) {
-        if self.pending.is_some() {
-            return;
-        }
-        self.refreshed = Instant::now();
-        let key = match &self.key {
-            Ok(key) => key.clone(),
-            Err(error) => {
-                self.error = Some(error.clone());
-                return;
-            }
-        };
-        match Job::spawn(move || linear::fetch_issues(&key)) {
-            Ok(job) => self.pending = Some(job),
-            Err(error) => self.error = Some(error),
-        }
-    }
-
-    fn poll(&mut self) {
-        let Some(job) = &self.pending else { return };
-        if let Some(result) = job.poll() {
-            self.pending = None;
-            self.refreshed = Instant::now();
-            match result {
-                Ok(issues) => {
-                    self.apply_snapshot(issues);
-                    self.error = None;
-                }
-                Err(error) => self.error = Some(error),
-            }
-        }
-    }
-
-    fn apply_snapshot(&mut self, mut issues: Vec<linear::Issue>) {
-        let selected_id = self.selected().map(|issue| issue.id.clone());
-        let old_index = self.list.selected().unwrap_or(0);
-        // A complete membership snapshot reconciles completed/unassigned/deleted issues.
-        // Keep unchanged objects by updatedAt; delta-only queries miss removals.
-        let old: std::collections::HashMap<_, _> = std::mem::take(&mut self.issues)
-            .into_iter()
-            .map(|i| (i.id.clone(), i))
-            .collect();
-        for issue in &mut issues {
-            if let Some(previous) = old
-                .get(&issue.id)
-                .filter(|old| old.updated_at == issue.updated_at)
-            {
-                *issue = previous.clone();
-            }
-        }
-        issues.sort_by(|a, b| {
-            b.is_in_review()
-                .cmp(&a.is_in_review())
-                .then(b.updated_at.cmp(&a.updated_at))
-                .then(a.id.cmp(&b.id))
-        });
-        let index = selected_id
-            .and_then(|id| issues.iter().position(|i| i.id == id))
-            .unwrap_or(old_index.min(issues.len().saturating_sub(1)));
-        self.list
-            .select(if issues.is_empty() { None } else { Some(index) });
-        self.issues = issues;
-    }
-
-    pub fn selected(&self) -> Option<&linear::Issue> {
-        self.list.selected().and_then(|i| self.issues.get(i))
-    }
-
-    pub fn loading(&self) -> bool {
-        self.pending.is_some()
+        self.list.refresh(&self.key, linear::fetch_issues);
     }
 }
+
+mod issue_list;
+pub use issue_list::IssueList;
 
 #[cfg(test)]
 mod tests;
@@ -238,10 +165,11 @@ impl App {
     pub fn selected(&self) -> Option<(usize, &linear::Issue)> {
         if self.all_accounts_queue() {
             let &(account, index) = self.queue_list.selected().and_then(|i| self.queue.get(i))?;
-            Some((account, self.accounts.get(account)?.issues.get(index)?))
+            Some((account, self.accounts.get(account)?.list.issues.get(index)?))
         } else {
             self.accounts
                 .get(self.active)?
+                .list
                 .selected()
                 .map(|issue| (self.active, issue))
         }
@@ -251,7 +179,7 @@ impl App {
         if self.all_accounts_queue() {
             &mut self.queue_list
         } else {
-            &mut self.accounts[self.active].list
+            &mut self.accounts[self.active].list.selection
         }
     }
 
@@ -260,11 +188,11 @@ impl App {
             .accounts
             .iter()
             .enumerate()
-            .flat_map(|(a, account)| (0..account.issues.len()).map(move |i| (a, i)))
+            .flat_map(|(a, account)| (0..account.list.issues.len()).map(move |i| (a, i)))
             .collect();
         self.queue.sort_by(|&(a, i), &(b, j)| {
-            let x = &self.accounts[a].issues[i];
-            let y = &self.accounts[b].issues[j];
+            let x = &self.accounts[a].list.issues[i];
+            let y = &self.accounts[b].list.issues[j];
             y.is_in_review()
                 .cmp(&x.is_in_review())
                 .then(y.updated_at.cmp(&x.updated_at))
@@ -275,7 +203,7 @@ impl App {
             .and_then(|(a, id)| {
                 self.queue
                     .iter()
-                    .position(|&(b, i)| a == b && self.accounts[b].issues[i].id == id)
+                    .position(|&(b, i)| a == b && self.accounts[b].list.issues[i].id == id)
             })
             .unwrap_or(
                 self.queue_list
@@ -295,14 +223,14 @@ impl App {
             .queue_list
             .selected()
             .and_then(|i| self.queue.get(i))
-            .map(|&(a, i)| (a, self.accounts[a].issues[i].id.clone()));
+            .map(|&(a, i)| (a, self.accounts[a].list.issues[i].id.clone()));
         for (index, account) in self.accounts.iter_mut().enumerate() {
-            account.poll();
+            account.list.poll();
             if !self
                 .pending_mutation
                 .as_ref()
                 .is_some_and(|m| m.account == index)
-                && account.refreshed.elapsed() >= REFRESH_INTERVAL
+                && account.list.refreshed.elapsed() >= REFRESH_INTERVAL
             {
                 account.refresh();
             }
@@ -1072,7 +1000,7 @@ impl App {
         match Job::spawn(move || linear::change_state(&key, &id, &state_id)) {
             Ok(job) => {
                 // A refresh started before this write must not overwrite the mutation result.
-                self.accounts[account].pending = None;
+                self.accounts[account].list.pending = None;
                 self.pending_mutation = Some(PendingMutation {
                     account,
                     issue_id,
@@ -1101,16 +1029,22 @@ impl App {
                     "{} / {} → {}",
                     account.name, pending.title, state.name
                 ));
-                if let Some(issue) = account.issues.iter_mut().find(|i| i.id == pending.issue_id) {
+                if let Some(issue) = account
+                    .list
+                    .issues
+                    .iter_mut()
+                    .find(|i| i.id == pending.issue_id)
+                {
                     issue.state = state;
                 }
                 let issues = account
+                    .list
                     .issues
                     .iter()
                     .filter(|i| i.is_open())
                     .cloned()
                     .collect();
-                account.apply_snapshot(issues);
+                account.list.apply_snapshot(issues);
             }
             Err(error) if error.contains(linear::UNKNOWN_OUTCOME) => {
                 // A timeout may follow a successful write; never claim it failed.
