@@ -171,8 +171,10 @@ pub struct App {
     pub view: View,
     pub queue: Vec<(usize, usize)>,
     pub queue_list: ListState,
-    /// The All-accounts queue selection of the Issue scope not shown.
+    /// The All-accounts queue selection of the Issue scope not shown: its list state (scroll
+    /// and the fallback index) and the selected Account + issue ID.
     hidden_queue_list: ListState,
+    hidden_queue_selected: Option<(usize, String)>,
     quit: bool,
     pending_review: Option<PendingReview>,
     // Retained even after leaving the PR view: at most one status worker can run.
@@ -199,6 +201,7 @@ impl App {
             queue: Vec::new(),
             queue_list: ListState::default(),
             hidden_queue_list: ListState::default(),
+            hidden_queue_selected: None,
             quit: false,
             pending_review: None,
             pending_readiness: None,
@@ -273,14 +276,22 @@ impl App {
         });
     }
 
-    fn poll_background(&mut self) {
-        let selected = self
-            .queue_list
+    /// The All-accounts queue's selected Account + issue ID.
+    fn queue_selected(&self) -> Option<(usize, String)> {
+        self.queue_list
             .selected()
             .and_then(|i| self.queue.get(i))
-            .map(|&(a, i)| (a, self.accounts[a].list.issues[i].id.clone()));
+            .map(|&(a, i)| (a, self.accounts[a].list.issues[i].id.clone()))
+    }
+
+    fn poll_background(&mut self) {
+        let selected = self.queue_selected();
         for (index, account) in self.accounts.iter_mut().enumerate() {
             account.list.poll();
+            // A hidden scope's running fetch still lands, but it never starts a new one.
+            if let Some(hidden) = &mut account.hidden {
+                hidden.poll();
+            }
             if !self
                 .pending_mutation
                 .as_ref()
@@ -441,13 +452,15 @@ impl App {
     }
 
     fn toggle_scope(&mut self) {
+        // Hidden lists can change while hidden, so restore the selection by Account + issue ID.
+        let selected = self.queue_selected();
+        let shown = std::mem::replace(&mut self.hidden_queue_selected, selected);
         self.scope = self.scope.toggled();
         for account in &mut self.accounts {
             account.show(self.scope);
         }
-        // A hidden list does not change, so the stored queue index still names the same issue.
         std::mem::swap(&mut self.queue_list, &mut self.hidden_queue_list);
-        self.rebuild_queue(None);
+        self.rebuild_queue(shown);
     }
 
     fn picker_key(&mut self, code: KeyCode) {
@@ -1095,22 +1108,19 @@ impl App {
                     "{} / {} → {}",
                     account.name, pending.title, state.name
                 ));
-                if let Some(issue) = account
-                    .list
-                    .issues
-                    .iter_mut()
-                    .find(|i| i.id == pending.issue_id)
-                {
-                    issue.state = state;
+                // The scope may have switched since the write started; the issue can be in both.
+                for list in std::iter::once(&mut account.list).chain(account.hidden.as_mut()) {
+                    if let Some(issue) = list.issues.iter_mut().find(|i| i.id == pending.issue_id) {
+                        issue.state = state.clone();
+                    }
+                    let issues = list
+                        .issues
+                        .iter()
+                        .filter(|i| i.is_open())
+                        .cloned()
+                        .collect();
+                    list.apply_snapshot(issues);
                 }
-                let issues = account
-                    .list
-                    .issues
-                    .iter()
-                    .filter(|i| i.is_open())
-                    .cloned()
-                    .collect();
-                account.list.apply_snapshot(issues);
             }
             Err(error) if error.contains(linear::UNKNOWN_OUTCOME) => {
                 // A timeout may follow a successful write; never claim it failed.
@@ -1123,6 +1133,8 @@ impl App {
                 self.status = Some(format!("{} / {}: {error}", account.name, pending.title))
             }
         }
+        // A current-scope fetch started before the write finished (by `t`) may predate it.
+        account.list.pending = None;
         account.refresh(self.scope);
     }
 }

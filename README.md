@@ -20,9 +20,13 @@ Changed files on the left and the selected file's diff on the right.
 
 ## Features
 
-- Assigned open issues per Account; **In Review** first
+- Open issues per Account in two **Issue scopes**: **Assigned issues** (the default) and
+  **Team issues** (every open issue of your teams, plus your Assigned issues from other teams);
+  **In Review** first in both
+- Assignee on every row (`you`, display name, or `Unassigned`) and in the detail pane
 - Work/personal Account tabs and an **All-accounts queue**, with Account provenance
-- Background startup, manual refresh, and 60-second polling; selection preserved by issue ID
+- Background startup, manual refresh, and 60-second polling of the current Issue scope only;
+  selection preserved by issue ID in each scope
 - Paginated Linear issue loading (not limited to the first 100)
 - PR picker when an issue has several Linked PRs
 - Background PR diffs, file navigation, vertical and horizontal scrolling
@@ -38,6 +42,11 @@ Polling uses a complete membership snapshot to remove completed, unassigned, or 
 `updatedAt` identifies unchanged issue objects. One Account failure doesn't disable the others,
 and a failed refresh retains the last successful list. The All-accounts queue uses Account + issue ID,
 not potentially colliding issue identifiers.
+
+One Issue scope applies to every Account tab and the All-accounts queue, and the app always starts
+on Assigned issues. Team issues load the first time you press `t`. After that, each scope keeps its
+own list, selection, and errors; the hidden scope starts no requests, but a fetch already running
+for it still updates its stored list.
 
 ## Requirements
 
@@ -139,7 +148,8 @@ Restart existing panes after rebuilding; they don't hot-reload the binary.
 | `a` | Open the All-accounts queue |
 | `Enter` | Open a Linked PR in the PR view; choose one if there are several |
 | `s` | Pick a new issue state for its team |
-| `r` | Refresh this Account, or all Accounts in the All-accounts queue |
+| `t` | Toggle the Issue scope between Assigned issues and Team issues |
+| `r` | Refresh the current Issue scope of this Account, or of all Accounts in the All-accounts queue |
 | `q`, `Esc` | Quit (`Esc` first cancels a pending PR load) |
 | `Ctrl+C` | Quit from any view (waits while a submitted merge is being verified) |
 
@@ -151,6 +161,7 @@ only after that. A submitted mutation cannot be canceled; its
 result is routed to the original Account even if you switch Account tabs. Errors leave the original
 state intact. If the request times out, the outcome is reported as unknown and the Account is
 refreshed to show the real state. Completed/canceled issues disappear from the open list after success.
+After a state change the Account refreshes its current Issue scope, even if you pressed `t` meanwhile.
 
 ### PR view
 
@@ -282,10 +293,14 @@ and the launcher deliberately focuses an existing pane rather than replacing it.
 
 1. Launch a fresh pane and confirm work and personal Accounts load independently in their Account tabs.
 2. Press `a`: the All-accounts queue shows each issue's Account; `r` refreshes all Accounts without freezing.
-3. Select an issue with multiple Linked PRs, press `Enter`, choose a Linked PR, and test cancellation/retry.
-4. In the PR view, test `f` for Full-file view, `h/l`, `d/u`, and changing files; return with `Esc`.
-5. On a disposable test issue, press `s`, cancel once, then select/apply a state. Verify in Linear.
-6. With the default config, confirm `m` in the PR view does nothing. For an explicitly authorized
+3. Press `t`, then check both the work and the personal Account tab: the tab bar shows `Team`, and
+   each Account loads its Team issues. In each Account's Team issues, confirm that a teammate's issue and an issue
+   assigned to you in another team (one you are not a member of) both appear. Press `t` again: the
+   Assigned list and its selection come back at once.
+4. Select an issue with multiple Linked PRs, press `Enter`, choose a Linked PR, and test cancellation/retry.
+5. In the PR view, test `f` for Full-file view, `h/l`, `d/u`, and changing files; return with `Esc`.
+6. On a disposable test issue, press `s`, cancel once, then select/apply a state. Verify in Linear.
+7. With the default config, confirm `m` in the PR view does nothing. For an explicitly authorized
    merge smoke test, use only a **disposable PR in a throwaway repository** you control, linked to a
    disposable Linear issue. Set top-level `enable_merge = true` in your private test config and restart.
    Open that PR, inspect readiness (`r`) and the diff, press `m`, and verify only repository-allowed
@@ -296,8 +311,8 @@ and the launcher deliberately focuses an existing pane rather than replacing it.
    unknown/not confirmed (including queued), refresh and inspect GitHub; do not submit again.
    Restore `enable_merge = false` and restart afterward. This is a manual write test, not an automated
    test or a claim that live merging has been validated.
-7. Test a missing/invalid key: the other Account must still work.
-8. Invoke **Open Linear issues** from the Herdr UI launcher (or its configured keybinding).
+8. Test a missing/invalid key: the other Account must still work.
+9. Invoke **Open Linear issues** from the Herdr UI launcher (or its configured keybinding).
    Repeat it and confirm it focuses the existing Linear pane instead of creating a duplicate.
 
 ### Fresh GitHub-install smoke test
