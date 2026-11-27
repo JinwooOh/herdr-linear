@@ -154,6 +154,10 @@ fn account_tab_footer_shows_only_that_accounts_errors() {
     let personal = render(&mut app);
     assert!(!personal.contains("team fetch offline"), "{personal}");
     assert!(personal.contains("work (0) !"), "{personal}");
+    app.accounts[1].list.error = Some("rate limited".into());
+    let personal = render(&mut app);
+    assert!(personal.contains("personal: rate limited"), "{personal}");
+    assert!(!personal.contains("team fetch offline"), "{personal}");
 }
 #[test]
 fn all_accounts_queue_footer_shows_every_accounts_errors_with_names() {
@@ -167,6 +171,12 @@ fn all_accounts_queue_footer_shows_every_accounts_errors_with_names() {
     assert!(queue.contains("work: team fetch offline"), "{queue}");
     assert!(queue.contains("work (0) !"), "{queue}");
     assert!(!queue.contains("personal (0) !"), "{queue}");
+    app.accounts[1].list.error = Some("rate limited".into());
+    let queue = render(&mut app);
+    assert!(
+        queue.contains("work: team fetch offline | personal: rate limited"),
+        "{queue}"
+    );
 }
 #[test]
 fn refresh_is_nonblocking_and_does_not_replace_an_active_request() {
