@@ -267,6 +267,50 @@ fn the_cutoff_follows_the_longest_account_name_on_every_account_tab() {
     }
 }
 
+/// One Account whose configured name hides a right-to-left override, with one long-title issue.
+fn account_name_with_control_character() -> App {
+    let mut app = App::new(
+        [AccountConfig {
+            name: "a\u{202e}".into(),
+            key: Err("test account".into()),
+        }]
+        .into(),
+    );
+    app.accounts[0].list.apply_snapshot(vec![serde_json::from_value(serde_json::json!({"id":"i","identifier":"HL-1","title":"abcdefghijklmnopqrstuvwxyz","url":"https://linear.app/test","priority":0,"branchName":"b","updatedAt":"2026-01-01T00:00:00Z","team":{"id":"team"},"state":{"id":"s","name":"Todo","type":"started"},"attachments":{"nodes":[]}})).unwrap()]);
+    app.poll_background();
+    app
+}
+
+#[test]
+fn the_cutoff_measures_the_sanitized_account_prefix_that_queue_rows_draw() {
+    let mut app = account_name_with_control_character();
+    app.on_key(KeyCode::Char('a'));
+    // "[a<U+202E>] " 12 + 9 + 12 + 16 = 49 inside the borders, so the list needs 51.
+    // 45% of 113 is 50.85 (51); 45% of 112 is 50.4 (50).
+    assert!(!side_by_side(&screen(&mut app, 112, 30)), "stacked at 112");
+    let text = screen(&mut app, 113, 30);
+    assert!(side_by_side(&text), "side by side at 113:\n{text}");
+    assert!(
+        text.contains("│[a<U+202E>] HL-1     Todo        abcdefghijklmnop││"),
+        "sanitized prefix and 16 title cells at 113:\n{text}"
+    );
+}
+
+#[test]
+fn the_account_tab_bar_shows_sanitized_account_names() {
+    let mut app = account_name_with_control_character();
+    let text = screen(&mut app, 120, 30);
+    let tabs = text.lines().next().unwrap();
+    assert!(tabs.contains(" a<U+202E> (1) "), "tab bar: {tabs}");
+}
+
+#[test]
+fn the_detail_pane_shows_the_sanitized_account_name() {
+    let mut app = account_name_with_control_character();
+    let text = screen(&mut app, 120, 30);
+    assert!(text.contains("│Account: a<U+202E>  "), "detail pane:\n{text}");
+}
+
 #[test]
 fn panes_stack_under_80_columns_even_with_a_one_letter_account() {
     let mut app = App::new(
