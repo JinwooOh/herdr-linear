@@ -160,7 +160,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Some((account, issue)) => {
             let mut lines = vec![Line::from(format!(
                 "Account: {}",
-                app.accounts[account].name
+                crate::display::safe(&app.accounts[account].name)
             ))];
             lines.extend(detail_lines(issue));
             lines
@@ -328,7 +328,12 @@ fn account_tabs(app: &App) -> Line<'static> {
         } else {
             ""
         };
-        let label = format!("{} ({}){}", account.name, account.list.issues.len(), marker);
+        let label = format!(
+            "{} ({}){}",
+            crate::display::safe(&account.name),
+            account.list.issues.len(),
+            marker
+        );
         let style = if index == app.active {
             Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
@@ -355,9 +360,10 @@ const MIN_TITLE_WIDTH: usize = 16;
 const IDENTIFIER_WIDTH: usize = 9;
 const STATE_WIDTH: usize = 12;
 
-/// The `[account] ` prefix that All-accounts queue rows start with.
+/// The `[account] ` prefix that All-accounts queue rows start with, sanitized for display.
+/// `min_queue_row_width` measures this same text.
 fn account_prefix(name: &str) -> String {
-    format!("[{name}] ")
+    format!("[{}] ", crate::display::safe(name))
 }
 
 /// Row cells an All-accounts queue row needs to keep `MIN_TITLE_WIDTH` title cells
