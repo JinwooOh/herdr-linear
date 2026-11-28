@@ -312,6 +312,51 @@ fn the_detail_pane_shows_the_sanitized_account_name() {
 }
 
 #[test]
+fn the_state_picker_heading_shows_the_sanitized_account_name_and_issue() {
+    let mut app = account_name_with_control_character();
+    app.view = View::StatePicker(StatePicker {
+        account: 0,
+        issue_id: "i".into(),
+        title: "HL\u{200b}1".into(),
+        options: Vec::new(),
+        current_state: "s".into(),
+        started: Instant::now(),
+        confirming: false,
+        list: ListState::default(),
+        pending: None,
+        error: None,
+    });
+    let text = screen(&mut app, 120, 30);
+    let heading = text.lines().next().unwrap();
+    assert!(
+        heading.contains(" a<U+202E> / HL<U+200B>1 — change state "),
+        "heading: {heading}"
+    );
+}
+
+#[test]
+fn the_pr_picker_heading_shows_the_sanitized_issue() {
+    let mut app = account_name_with_control_character();
+    app.view = View::PrPicker(PrPicker {
+        title: "HL\u{200b}1".into(),
+        options: (1..=2)
+            .map(|n| linear::Attachment {
+                title: Some(format!("PR {n}")),
+                url: format!("https://github.com/o/r/pull/{n}"),
+                source_type: None,
+            })
+            .collect(),
+        list: ListState::default(),
+    });
+    let text = screen(&mut app, 120, 30);
+    let heading = text.lines().next().unwrap();
+    assert!(
+        heading.contains(" HL<U+200B>1 — choose PR "),
+        "heading: {heading}"
+    );
+}
+
+#[test]
 fn panes_stack_under_80_columns_even_with_a_one_letter_account() {
     let mut app = App::new(
         [AccountConfig {
