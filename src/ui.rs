@@ -37,7 +37,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
             frame.render_stateful_widget(
                 List::new(rows)
-                    .block(Block::bordered().title(format!(" {} — choose PR ", picker.title)))
+                    .block(Block::bordered().title(format!(
+                        " {} — choose PR ",
+                        crate::display::safe(&picker.title)
+                    )))
                     .highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
                 body,
                 &mut picker.list,
@@ -51,7 +54,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         View::StatePicker(picker) => {
             let heading = format!(
                 " {} / {} — change state ",
-                app.accounts[picker.account].name, picker.title
+                crate::display::safe(&app.accounts[picker.account].name),
+                crate::display::safe(&picker.title)
             );
             let [body, footer] =
                 Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
